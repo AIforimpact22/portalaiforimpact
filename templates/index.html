@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>BV Management Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <style>
+    :root { --bg:#0f1226; --panel:#171a33; --mut:#9aa3b2; --hi:#f3f4f6; --acc:#7c5cff; --green:#22c55e; --red:#ef4444; }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--hi);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+    a{color:var(--acc);text-decoration:none} .container{max-width:1100px;margin:0 auto;padding:24px}
+    .grid{display:grid;gap:16px} .grid.cards{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
+    .card{background:var(--panel);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,.06)}
+    .mut{color:var(--mut);font-size:12px}
+    .h1{font-size:22px;font-weight:700;margin:0 0 8px} .h2{font-size:16px;font-weight:700;margin:0 0 8px}
+    .row{display:flex;gap:12px;flex-wrap:wrap} input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#121533;color:#fff}
+    label{font-size:12px;color:var(--mut)} button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;background:var(--acc);color:#fff;font-weight:600}
+    table{width:100%;border-collapse:separate;border-spacing:0 8px} th,td{padding:10px 12px;text-align:left}
+    tr{background:rgba(255,255,255,.03)} tr:hover{background:rgba(255,255,255,.05)}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+    .success{color:var(--green)} .danger{color:var(--red)} .right{justify-content:flex-end}
+    .flex{display:flex;align-items:center;gap:12px} .mt8{margin-top:8px} .mt16{margin-top:16px} .mt24{margin-top:24px}
+    .grid.cols-2{grid-template-columns:repeat(2,1fr)} .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+    .sticky{position:sticky;top:0;background:var(--bg);padding:16px 0;margin:-24px 0 16px;z-index:2;border-bottom:1px solid rgba(255,255,255,.06)}
+    .flash{padding:10px 12px;border-radius:10px;margin:8px 0}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sticky">
+      <div class="flex" style="justify-content:space-between">
+        <div class="h1">BV Management Dashboard</div>
+        <div class="mut">Currency: EUR • All dates local</div>
+      </div>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for cat,msg in messages %}
+        <div class="flash card" style="border-left:5px solid {% if cat=='success' %}var(--green){% elif cat=='danger' %}var(--red){% else %}var(--acc){% endif %}">
+          {{ msg }}
+        </div>
+      {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <div class="grid cards">
+      <div class="card">
+        <div class="mut">MTD Income</div>
+        <div class="h1">€ {{ '%.2f'|format(mtd_income) }}</div>
+      </div>
+      <div class="card">
+        <div class="mut">MTD Expenses</div>
+        <div class="h1">€ {{ '%.2f'|format(mtd_expenses) }}</div>
+      </div>
+      <div class="card">
+        <div class="mut">YTD Income</div>
+        <div class="h1">€ {{ '%.2f'|format(ytd_income) }}</div>
+      </div>
+      <div class="card">
+        <div class="mut">YTD Expenses</div>
+        <div class="h1">€ {{ '%.2f'|format(ytd_expenses) }}</div>
+      </div>
+    </div>
+
+    <div class="grid cols-2 mt24">
+      <!-- Create Invoice -->
+      <div class="card">
+        <div class="h2">Create Invoice</div>
+        <form method="post" action="{{ url_for('create_invoice') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="grid cols-2">
+            <div>
+              <label>Invoice No (auto if blank)</label>
+              <input name="invoice_no" placeholder="{{ next_invoice_guess }}">
+            </div>
+            <div>
+              <label>Client name</label>
+              <input name="client_name" required>
+            </div>
+          </div>
+          <div class="grid cols-2 mt8">
+            <div>
+              <label>Issue date</label>
+              <input type="date" name="issue_date" value="{{ (cycler).current_date if false else '' }}" required>
+            </div>
+            <div>
+              <label>Due date</label>
+              <input type="date" name="due_date" required>
+            </div>
+          </div>
+          <div class="grid cols-3 mt8">
+            <div>
+              <label>Amount</label>
+              <input type="number" step="0.01" name="amount" required>
+            </div>
+            <div>
+              <label>Currency</label>
+              <select name="currency">
+                <option value="EUR" selected>EUR</option>
+              </select>
+            </div>
+            <div>
+              <label>Notes</label>
+              <input name="notes" placeholder="Optional">
+            </div>
+          </div>
+          <div class="row right mt16"><button>Create</button></div>
+        </form>
+      </div>
+
+      <!-- Record Income (standalone) -->
+      <div class="card">
+        <div class="h2">Record Income (No Invoice)</div>
+        <form method="post" action="{{ url_for('add_income') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="grid cols-3">
+            <div>
+              <label>Date</label>
+              <input type="date" name="date" required>
+            </div>
+            <div>
+              <label>Amount</label>
+              <input type="number" step="0.01" name="amount" required>
+            </div>
+            <div>
+              <label>Method</label>
+              <select name="method">
+                <option value="bank">Bank</option>
+                <option value="western_union">Western Union</option>
+                <option value="cash">Cash</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid cols-2 mt8">
+            <div>
+              <label>Reference</label>
+              <input name="reference" placeholder="e.g., bank ref">
+            </div>
+            <div>
+              <label>Note</label>
+              <input name="note" placeholder="Optional">
+            </div>
+          </div>
+          <div class="row right mt16"><button>Save Income</button></div>
+        </form>
+      </div>
+    </div>
+
+    <div class="grid cols-2 mt24">
+      <!-- Record Expense -->
+      <div class="card">
+        <div class="h2">Add Expense</div>
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('add_expense') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="grid cols-3">
+            <div>
+              <label>Date</label>
+              <input type="date" name="date" required>
+            </div>
+            <div>
+              <label>Amount</label>
+              <input type="number" step="0.01" name="amount" required>
+            </div>
+            <div>
+              <label>Currency</label>
+              <select name="currency">
+                <option value="EUR" selected>EUR</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid cols-3 mt8">
+            <div>
+              <label>Vendor</label>
+              <input name="vendor" placeholder="Supplier name" required>
+            </div>
+            <div>
+              <label>Category</label>
+              <input name="category" list="cats" placeholder="e.g., Software" required>
+              <datalist id="cats">
+                <option>Software</option><option>DGA Salary</option><option>Tax - Wage</option>
+                <option>Tax - CIT</option><option>Travel</option><option>Office</option>
+              </datalist>
+            </div>
+            <div>
+              <label>Receipt (PDF/JPG/PNG)</label>
+              <input type="file" name="receipt" accept=".pdf,.png,.jpg,.jpeg">
+            </div>
+          </div>
+          <div class="mt8">
+            <label>Description</label>
+            <input name="description" placeholder="Optional notes">
+          </div>
+          <div class="row right mt16"><button>Save Expense</button></div>
+        </form>
+      </div>
+
+      <!-- Unpaid invoices quick-pay -->
+      <div class="card">
+        <div class="h2">Unpaid Invoices</div>
+        {% if unpaid_invoices|length == 0 %}
+          <div class="mut">No unpaid invoices.</div>
+        {% else %}
+          <table>
+            <thead>
+              <tr><th>Invoice</th><th>Client</th><th>Due</th><th>Balance</th><th>Pay</th></tr>
+            </thead>
+            <tbody>
+            {% for inv in unpaid_invoices %}
+              <tr>
+                <td>{{ inv.invoice_no }}</td>
+                <td>{{ inv.client_name }}</td>
+                <td>{{ inv.due_date }}</td>
+                <td>€ {{ '%.2f'|format(inv.balance) }}</td>
+                <td>
+                  <form method="post" action="{{ url_for('pay_invoice', invoice_id=inv.id) }}" class="flex">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="date" name="date" required style="width:140px">
+                    <input type="number" step="0.01" name="amount" value="{{ '%.2f'|format(inv.balance) }}" style="width:120px">
+                    <select name="method" style="width:150px">
+                      <option value="bank">Bank</option>
+                      <option value="western_union">Western Union</option>
+                      <option value="cash">Cash</option>
+                      <option value="other">Other</option>
+                    </select>
+                    <input name="reference" placeholder="Ref" style="width:120px">
+                    <button>Record</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="grid cols-2 mt24">
+      <div class="card">
+        <div class="h2">Recent Payments</div>
+        <table>
+          <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead>
+          <tbody>
+          {% for p in recent_payments %}
+            <tr>
+              <td>{{ p.date }}</td>
+              <td>€ {{ '%.2f'|format(p.amount) }}</td>
+              <td>{{ p.method }}</td>
+              <td>{{ p.reference or '' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="h2">Recent Expenses</div>
+        <table>
+          <thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th>Amount</th><th>Receipt</th></tr></thead>
+          <tbody>
+          {% for e in recent_expenses %}
+            <tr>
+              <td>{{ e.date }}</td>
+              <td>{{ e.vendor }}</td>
+              <td>{{ e.category }}</td>
+              <td>€ {{ '%.2f'|format(e.amount) }}</td>
+              <td>
+                {% if e.receipt_path %}
+                  <a href="{{ url_for('uploaded_file', filename=e.receipt_path) }}">View</a>
+                {% else %}
+                  <span class="mut">—</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card mt24">
+      <div class="mut">
+        Tip: if you receive customer money via Western Union and then deposit to your BV bank, record it as Income (method “Western Union”), then link to an invoice payment later if needed.
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
