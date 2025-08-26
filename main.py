@@ -15,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 from dateutil.relativedelta import relativedelta
+from dotenv import load_dotenv
 
 # -------------------------
 # Config
@@ -307,6 +308,7 @@ def add_expense():
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=False)
+load_dotenv()  # loads .env if present (local dev); safe in production
 
 if __name__ == "__main__":
     app.run(debug=True)
