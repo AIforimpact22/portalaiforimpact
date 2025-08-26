@@ -1,3 +1,6 @@
 flask
 sqlalchemy
 python-dateutil
+psycopg2-binary
+python-dotenv
+gunicorn
