@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Settings · BV Management{% endblock %}
+{% block content %}
+<div class="h1">Company Settings (invoice requirements)</div>
+<form method="post" action="{{ url_for('save_settings') }}" class="card section">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="grid" style="grid-template-columns: 1fr 1fr">
+    <div><label>Company name</label><input name="company_name" value="{{ company.company_name }}" required></div>
+    <div><label>KVK</label><input name="kvk" value="{{ company.kvk }}" required></div>
+    <div><label>RSIN</label><input name="rsin" value="{{ company.rsin }}" required></div>
+    <div><label>VAT number</label><input name="vat_number" value="{{ company.vat_number }}" required></div>
+    <div><label>Invoice prefix</label><input name="invoice_prefix" value="{{ company.invoice_prefix or 'INV' }}" required></div>
+    <div><label>IBAN</label><input name="iban" value="{{ company.iban }}" required></div>
+    <div><label>BIC</label><input name="bic" value="{{ company.bic }}" required></div>
+    <div><label>Address (street)</label><input name="address" value="{{ company.address }}" required></div>
+    <div><label>Postcode</label><input name="postcode" value="{{ company.postcode }}" required></div>
+    <div><label>City</label><input name="city" value="{{ company.city }}" required></div>
+    <div><label>Country</label><input name="country" value="{{ company.country }}" required></div>
+  </div>
+  <div class="row right section"><button>Save</button></div>
+</form>
+
+<div class="card section">
+  <div class="h2">Your legal block (for invoices)</div>
+  <div class="mut">
+    {{ company.company_name }}<br/>
+    {{ company.address }}, {{ company.postcode }} {{ company.city }}, {{ company.country }}<br/>
+    Ingeschreven bij de Kamer van Koophandel onder nummer {{ company.kvk }}<br/>
+    RSIN: {{ company.rsin }} | BTW-nummer: {{ company.vat_number }}<br/>
+    IBAN: {{ company.iban }} | BIC: {{ company.bic }}
+  </div>
+</div>
+{% endblock %}
