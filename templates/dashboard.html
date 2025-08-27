@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · BV Management{% endblock %}
+{% block content %}
+  <div class="h1">Main Dashboard</div>
+  <div class="grid cards section">
+    <div class="card"><div class="mut">YTD Income</div><div class="h1">€ {{ '%.2f'|format(ytd_income) }}</div></div>
+    <div class="card"><div class="mut">YTD Expenses (gross)</div><div class="h1">€ {{ '%.2f'|format(ytd_expenses) }}</div></div>
+    <div class="card">
+      <div class="mut">VAT summary ({{ q_start }} → {{ q_end }})</div>
+      <div>Sales 21%: € {{ '%.2f'|format(sales_21) }}</div>
+      <div>Sales 9%: € {{ '%.2f'|format(sales_9) }}</div>
+      <div>Sales 0%/Exempt: € {{ '%.2f'|format(sales_0) }}</div>
+      <div class="section">Output VAT: € {{ '%.2f'|format(vat_out) }}</div>
+      <div>Input VAT: € {{ '%.2f'|format(vat_in) }}</div>
+      <div class="h2 section">Net VAT due: € {{ '%.2f'|format(vat_due) }}</div>
+    </div>
+  </div>
+
+  <div class="grid section" style="grid-template-columns: 1fr 1fr 1fr">
+    <div class="card">
+      <div class="h2">Recent Invoices</div>
+      <table>
+        <thead><tr><th>No.</th><th>Client</th><th>Due</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for inv in recent_invoices %}
+          <tr onclick="location.href='{{ url_for('invoice_detail', invoice_id=inv.id) }}'" style="cursor:pointer">
+            <td>{{ inv.invoice_no }}</td><td>{{ inv.client_name }}</td><td>{{ inv.due_date }}</td><td>{{ inv.status }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="section"><a href="{{ url_for('invoices_list') }}">View all invoices →</a></div>
+    </div>
+
+    <div class="card">
+      <div class="h2">Recent Expenses</div>
+      <table>
+        <thead><tr><th>Date</th><th>Vendor</th><th>Gross</th></tr></thead>
+        <tbody>
+        {% for e in recent_expenses %}
+          <tr>
+            <td>{{ e.date }}</td><td>{{ e.vendor }}</td><td>€ {{ '%.2f'|format(e.amount_gross) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="section"><a href="{{ url_for('expenses_list') }}">View all expenses →</a></div>
+    </div>
+
+    <div class="card">
+      <div class="h2">Recent Payments</div>
+      <table>
+        <thead><tr><th>Date</th><th>Amount</th><th>Method</th></tr></thead>
+        <tbody>
+        {% for p in recent_payments %}
+          <tr><td>{{ p.date }}</td><td>€ {{ '%.2f'|format(p.amount) }}</td><td>{{ p.method }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="section"><a href="{{ url_for('income_new_page') }}">Record income →</a></div>
+    </div>
+  </div>
+{% endblock %}
