@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Invoices · BV Management{% endblock %}
+{% block content %}
+  <div class="h1">Invoices</div>
+  <div class="row section">
+    <a class="card" href="{{ url_for('invoice_new_page') }}" style="padding:10px 14px">+ Create Invoice</a>
+    <form method="get" class="row" style="margin-left:auto">
+      <label>Status filter</label>
+      <select name="status">
+        <option value="">All</option>
+        <option value="SENT" {% if status=='SENT' %}selected{% endif %}>Sent</option>
+        <option value="PARTIAL" {% if status=='PARTIAL' %}selected{% endif %}>Partial</option>
+        <option value="PAID" {% if status=='PAID' %}selected{% endif %}>Paid</option>
+      </select>
+      <button>Apply</button>
+    </form>
+  </div>
+
+  <div class="card section">
+    <table>
+      <thead><tr><th>No.</th><th>Issue</th><th>Client</th><th>Gross</th><th>Status</th><th>Due</th><th></th></tr></thead>
+      <tbody>
+      {% for inv in invoices %}
+        <tr>
+          <td>{{ inv.invoice_no }}</td>
+          <td>{{ inv.issue_date }}</td>
+          <td>{{ inv.client_name }}</td>
+          <td>€ {{ '%.2f'|format(inv.gross_total) }}</td>
+          <td>{{ inv.status }}</td>
+          <td>{{ inv.due_date }}</td>
+          <td><a href="{{ url_for('invoice_detail', invoice_id=inv.id) }}">Open</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}
+
