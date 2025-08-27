@@ -2,7 +2,6 @@ import os
 import secrets
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Optional
 
 from flask import (
     Flask, render_template, request, redirect, url_for,
@@ -12,7 +11,7 @@ from werkzeug.utils import secure_filename
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Date, Numeric, ForeignKey,
-    Text, func, select, UniqueConstraint, inspect, text, or_
+    Text, func, select, UniqueConstraint, inspect, text
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 
@@ -22,7 +21,7 @@ from dotenv import load_dotenv
 # -------------------------------------------------
 # Config
 # -------------------------------------------------
-load_dotenv()  # load .env locally (DATABASE_URL, SECRET_KEY)
+load_dotenv()
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -38,7 +37,7 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocom
 Base = declarative_base()
 
 # -------------------------------------------------
-# Your company defaults (auto-filled to avoid blanks)
+# Your company defaults (no blanks)
 # -------------------------------------------------
 DEFAULT_COMPANY = {
     "company_name": "Climate Resilience Fundraising Platform B.V.",
@@ -48,7 +47,7 @@ DEFAULT_COMPANY = {
     "country": "Netherlands",
     "kvk": "94437289",
     "rsin": "866777398",
-    "vat_number": "NL[xxxx.xxx].B01",  # replace when available
+    "vat_number": "NL[xxxx.xxx].B01",  # replace with your real VAT when available
     "iban": "NL06 REVO 7487 2866 30",
     "bic": "REVONL22",
     "invoice_prefix": "INV",
@@ -85,7 +84,7 @@ class Invoice(Base):
     id = Column(Integer, primary_key=True)
     invoice_no = Column(String(64), unique=True, nullable=False)
     issue_date = Column(Date, nullable=False, default=date.today)
-    supply_date = Column(Date, nullable=False, default=date.today)
+    supply_date = Column(Date, nullable=False, default=date.today)  # performance date
     due_date = Column(Date, nullable=False)
     currency = Column(String(8), nullable=False, default="EUR")
 
@@ -135,7 +134,7 @@ class InvoiceLine(Base):
 class Payment(Base):
     __tablename__ = "payments"
     id = Column(Integer, primary_key=True)
-    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)  # can be standalone income
+    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)  # standalone income allowed
     date = Column(Date, nullable=False, default=date.today)
     amount = Column(Numeric(12, 2), nullable=False)
     method = Column(String(32), nullable=False, default="bank")  # bank, cash, western_union, other
@@ -151,24 +150,108 @@ class Expense(Base):
     category = Column(String(64), nullable=False)  # Software, DGA Salary, Tax - Wage, Tax - CIT, Travel, Office...
     description = Column(Text, default="")
     currency = Column(String(8), nullable=False, default="EUR")
-    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # store 0 for exempt or 0%
+    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21/9/0; store 0 for exempt
     amount_net = Column(Numeric(12, 2), nullable=False, default=0)
     vat_amount = Column(Numeric(12, 2), nullable=False, default=0)
     amount_gross = Column(Numeric(12, 2), nullable=False, default=0)
     receipt_path = Column(String(256))
 
-# Create tables
+# Create tables first (adds new ones but won't add columns to existing tables)
 Base.metadata.create_all(engine)
 
-# One-time schema upgrade for rsin if DB existed before
-def ensure_schema_upgrades():
+# -------------------------------------------------
+# Automatic schema upgrades (fixes your error)
+# -------------------------------------------------
+def run_schema_upgrades():
     insp = inspect(engine)
+
+    # company_settings: ensure rsin column exists
     if insp.has_table("company_settings"):
         cols = {c['name'] for c in insp.get_columns("company_settings")}
         if "rsin" not in cols:
             with engine.begin() as conn:
                 conn.execute(text("ALTER TABLE company_settings ADD COLUMN rsin VARCHAR(32) DEFAULT ''"))
-ensure_schema_upgrades()
+
+    # expenses: ensure new VAT columns exist, backfill from legacy 'amount'
+    if insp.has_table("expenses"):
+        cols = {c['name'] for c in insp.get_columns("expenses")}
+        statements = []
+        if "amount_gross" not in cols:
+            statements.append("ALTER TABLE expenses ADD COLUMN amount_gross NUMERIC(12,2) DEFAULT 0")
+        if "amount_net" not in cols:
+            statements.append("ALTER TABLE expenses ADD COLUMN amount_net NUMERIC(12,2) DEFAULT 0")
+        if "vat_amount" not in cols:
+            statements.append("ALTER TABLE expenses ADD COLUMN vat_amount NUMERIC(12,2) DEFAULT 0")
+        if "vat_rate" not in cols:
+            statements.append("ALTER TABLE expenses ADD COLUMN vat_rate NUMERIC(5,2) DEFAULT 0")
+        if statements:
+            with engine.begin() as conn:
+                for s in statements:
+                    conn.execute(text(s))
+                # Backfill from legacy 'amount' if present
+                if "amount" in cols:
+                    conn.execute(text("""
+                        UPDATE expenses
+                        SET amount_gross = COALESCE(amount,0),
+                            amount_net   = COALESCE(amount,0),
+                            vat_amount   = 0,
+                            vat_rate     = 0
+                        WHERE COALESCE(amount_gross,0) = 0 AND COALESCE(amount_net,0) = 0
+                    """))
+
+    # invoices: add new columns if missing and backfill from legacy 'amount' and 'issue_date'
+    if insp.has_table("invoices"):
+        cols = {c['name'] for c in insp.get_columns("invoices")}
+        adds = []
+        if "supply_date" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN supply_date DATE")
+        if "vat_scheme" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN vat_scheme VARCHAR(32) DEFAULT 'STANDARD'")
+        if "client_address" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN client_address TEXT")
+        if "client_vat_number" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN client_vat_number VARCHAR(40)")
+        if "notes" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN notes TEXT")
+        if "status" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN status VARCHAR(16) DEFAULT 'SENT'")
+        if "net_total" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN net_total NUMERIC(12,2) DEFAULT 0")
+        if "vat_total" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN vat_total NUMERIC(12,2) DEFAULT 0")
+        if "gross_total" not in cols:
+            adds.append("ALTER TABLE invoices ADD COLUMN gross_total NUMERIC(12,2) DEFAULT 0")
+        if adds:
+            with engine.begin() as conn:
+                for s in adds:
+                    conn.execute(text(s))
+                # Backfill
+                if "supply_date" not in cols and "issue_date" in cols:
+                    conn.execute(text("UPDATE invoices SET supply_date = issue_date WHERE supply_date IS NULL"))
+                # Legacy 'amount' -> gross_total/net_total if present
+                if "amount" in cols:
+                    conn.execute(text("""
+                        UPDATE invoices
+                        SET gross_total = COALESCE(amount,0),
+                            net_total   = COALESCE(amount,0),
+                            vat_total   = 0
+                        WHERE COALESCE(gross_total,0) = 0 AND COALESCE(net_total,0) = 0
+                    """))
+
+    # invoice_lines: ensure computed columns exist (if table already existed from older version)
+    if insp.has_table("invoice_lines"):
+        cols = {c['name'] for c in insp.get_columns("invoice_lines")}
+        with engine.begin() as conn:
+            if "line_net" not in cols:
+                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_net NUMERIC(12,2) DEFAULT 0"))
+            if "line_vat" not in cols:
+                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_vat NUMERIC(12,2) DEFAULT 0"))
+            if "line_total" not in cols:
+                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_total NUMERIC(12,2) DEFAULT 0"))
+            if "vat_rate" not in cols:
+                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN vat_rate NUMERIC(5,2) DEFAULT 0"))
+
+run_schema_upgrades()
 
 # -------------------------------------------------
 # Helpers
@@ -294,7 +377,7 @@ def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
         if not company.vat_number:
             warns.append("Supplier VAT number missing in Company Settings.")
         elif "[" in (company.vat_number or ""):
-            warns.append("Supplier VAT number looks like a placeholder. Replace with your real VAT number.")
+            warns.append("Supplier VAT number looks like a placeholder. Replace it with your real VAT number.")
     if not company.iban or not company.bic:
         warns.append("IBAN/BIC missing in Company Settings.")
     if not inv.client_name or not inv.client_address:
@@ -308,17 +391,20 @@ def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
     return warns
 
 # -------------------------------------------------
-# Routes — PAGES
+# Page routes
 # -------------------------------------------------
 @app.route("/")
 def dashboard():
     db = get_db(); company = ensure_company(db)
     today = date.today()
-    ytd_income = db.execute(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year,1,1))).scalar_one()
-    ytd_expenses = db.execute(select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year,1,1))).scalar_one()
-    q_start, q_end = quarter_bounds(today)
-    vat = vat_summary(db, today.year, ((today.month - 1)//3)+1)
+    ytd_income = db.execute(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year,1,1))
+    ).scalar_one()
+    ytd_expenses = db.execute(
+        select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year,1,1))
+    ).scalar_one()
 
+    vat = vat_summary(db, today.year, ((today.month - 1)//3)+1)
     recent_invoices = db.execute(select(Invoice).order_by(Invoice.issue_date.desc()).limit(6)).scalars().all()
     recent_expenses = db.execute(select(Expense).order_by(Expense.date.desc()).limit(6)).scalars().all()
     recent_payments = db.execute(select(Payment).order_by(Payment.date.desc()).limit(6)).scalars().all()
@@ -338,10 +424,9 @@ def settings_page():
 def invoices_list():
     db = get_db(); company = ensure_company(db)
     status = request.args.get("status")
-    q = select(Invoice)
+    q = select(Invoice).order_by(Invoice.issue_date.desc())
     if status:
         q = q.where(Invoice.status == status)
-    q = q.order_by(Invoice.issue_date.desc())
     invoices = db.execute(q).scalars().all()
     return render_template("invoices_list.html", csrf_token=csrf_token(), company=company, invoices=invoices, status=status)
 
@@ -375,21 +460,8 @@ def income_new_page():
     db = get_db(); company = ensure_company(db)
     return render_template("income_new.html", csrf_token=csrf_token(), company=company)
 
-@app.route("/reports/vat")
-def vat_report():
-    db = get_db(); company = ensure_company(db)
-    year = int(request.args.get("year", date.today().year))
-    q = int(request.args.get("q", ((date.today().month - 1)//3)+1))
-    q = max(1, min(4, q))
-    data = vat_summary(db, year, q)
-    return render_template("dashboard.html",  # reuse dashboard layout section for VAT box
-        csrf_token=csrf_token(), company=company,
-        ytd_income=Decimal("0.00"), ytd_expenses=Decimal("0.00"),
-        **data, recent_invoices=[], recent_expenses=[], recent_payments=[]
-    )
-
 # -------------------------------------------------
-# Routes — ACTIONS (POST)
+# Actions (POST)
 # -------------------------------------------------
 @app.route("/settings/save", methods=["POST"])
 def save_settings():
