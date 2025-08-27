@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Record Income · BV Management{% endblock %}
+{% block content %}
+  <div class="h1">Record Income (No Invoice)</div>
+  <form method="post" action="{{ url_for('add_income') }}" class="card section">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div><label>Date</label><input type="date" name="date" required></div>
+      <div><label>Amount</label><input type="number" step="0.01" name="amount" required></div>
+      <div>
+        <label>Method</label>
+        <select name="method">
+          <option value="bank">Bank</option><option value="western_union">Western Union</option><option value="cash">Cash</option><option value="other">Other</option>
+        </select>
+      </div>
+      <div><label>Reference</label><input name="reference" placeholder="Bank/WU ref"></div>
+      <div style="grid-column:1 / span 2"><label>Note</label><input name="note" placeholder="Optional"></div>
+    </div>
+    <div class="row right section"><button>Save Income</button></div>
+  </form>
+{% endblock %}
