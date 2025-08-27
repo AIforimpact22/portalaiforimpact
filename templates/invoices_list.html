@@ -1,34 +1,21 @@
 {% extends "base.html" %}
-{% block title %}Invoices · BV Management{% endblock %}
+{% block title %}Expenses · BV Management{% endblock %}
 {% block content %}
-  <div class="h1">Invoices</div>
+  <div class="h1">Expenses</div>
   <div class="row section">
-    <a class="card" href="{{ url_for('invoice_new_page') }}" style="padding:10px 14px">+ Create Invoice</a>
-    <form method="get" class="row" style="margin-left:auto">
-      <label>Status filter</label>
-      <select name="status">
-        <option value="">All</option>
-        <option value="SENT" {% if status=='SENT' %}selected{% endif %}>Sent</option>
-        <option value="PARTIAL" {% if status=='PARTIAL' %}selected{% endif %}>Partial</option>
-        <option value="PAID" {% if status=='PAID' %}selected{% endif %}>Paid</option>
-      </select>
-      <button>Apply</button>
-    </form>
+    <a class="card" href="{{ url_for('expense_new_page') }}" style="padding:10px 14px">+ Add Expense</a>
   </div>
 
   <div class="card section">
     <table>
-      <thead><tr><th>No.</th><th>Issue</th><th>Client</th><th>Gross</th><th>Status</th><th>Due</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th>Gross</th><th>VAT</th><th>Receipt</th></tr></thead>
       <tbody>
-      {% for inv in invoices %}
+      {% for e in expenses %}
         <tr>
-          <td>{{ inv.invoice_no }}</td>
-          <td>{{ inv.issue_date }}</td>
-          <td>{{ inv.client_name }}</td>
-          <td>€ {{ '%.2f'|format(inv.gross_total) }}</td>
-          <td>{{ inv.status }}</td>
-          <td>{{ inv.due_date }}</td>
-          <td><a href="{{ url_for('invoice_detail', invoice_id=inv.id) }}">Open</a></td>
+          <td>{{ e.date }}</td><td>{{ e.vendor }}</td><td>{{ e.category }}</td>
+          <td>€ {{ '%.2f'|format(e.amount_gross) }}</td>
+          <td>€ {{ '%.2f'|format(e.vat_amount) }}</td>
+          <td>{% if e.receipt_path %}<a href="{{ url_for('uploaded_file', filename=e.receipt_path) }}">View</a>{% else %}<span class="mut">—</span>{% endif %}</td>
         </tr>
       {% endfor %}
       </tbody>
