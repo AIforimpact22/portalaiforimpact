@@ -12,7 +12,7 @@ from werkzeug.utils import secure_filename
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Date, Numeric, ForeignKey,
-    Text, func, select, UniqueConstraint, inspect, text
+    Text, func, select, UniqueConstraint, inspect, text, or_
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 
@@ -20,9 +20,9 @@ from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 
 # -------------------------------------------------
-# Config & helpers
+# Config
 # -------------------------------------------------
-load_dotenv()  # loads local .env for DATABASE_URL, SECRET_KEY, etc.
+load_dotenv()  # load .env locally (DATABASE_URL, SECRET_KEY)
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -38,7 +38,7 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocom
 Base = declarative_base()
 
 # -------------------------------------------------
-# DEFAULT COMPANY INFO (your data)
+# Your company defaults (auto-filled to avoid blanks)
 # -------------------------------------------------
 DEFAULT_COMPANY = {
     "company_name": "Climate Resilience Fundraising Platform B.V.",
@@ -48,11 +48,10 @@ DEFAULT_COMPANY = {
     "country": "Netherlands",
     "kvk": "94437289",
     "rsin": "866777398",
-    # Use your real VAT number when available; placeholder warns in UI
-    "vat_number": "NL[xxxx.xxx].B01",
+    "vat_number": "NL[xxxx.xxx].B01",  # replace when available
     "iban": "NL06 REVO 7487 2866 30",
     "bic": "REVONL22",
-    "invoice_prefix": "INV"
+    "invoice_prefix": "INV",
 }
 
 # -------------------------------------------------
@@ -86,16 +85,14 @@ class Invoice(Base):
     id = Column(Integer, primary_key=True)
     invoice_no = Column(String(64), unique=True, nullable=False)
     issue_date = Column(Date, nullable=False, default=date.today)
-    supply_date = Column(Date, nullable=False, default=date.today)  # performance date
+    supply_date = Column(Date, nullable=False, default=date.today)
     due_date = Column(Date, nullable=False)
     currency = Column(String(8), nullable=False, default="EUR")
 
-    # Customer details (Dutch invoice rules)
     client_name = Column(String(160), nullable=False)
     client_address = Column(Text, default="")
-    client_vat_number = Column(String(40), default="")  # required if reverse charge
+    client_vat_number = Column(String(40), default="")  # needed for reverse charge
 
-    # VAT scheme for the invoice header (applies alongside line VAT)
     # STANDARD / REVERSE_CHARGE_EU / ZERO_OUTSIDE_EU / EXEMPT
     vat_scheme = Column(String(32), nullable=False, default="STANDARD")
 
@@ -127,7 +124,7 @@ class InvoiceLine(Base):
     description = Column(Text, nullable=False)
     qty = Column(Numeric(12, 2), nullable=False, default=1)
     unit_price = Column(Numeric(12, 2), nullable=False, default=0)
-    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21.00 / 9.00 / 0.00
+    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21 / 9 / 0
 
     line_net = Column(Numeric(12, 2), nullable=False, default=0)
     line_vat = Column(Numeric(12, 2), nullable=False, default=0)
@@ -144,7 +141,6 @@ class Payment(Base):
     method = Column(String(32), nullable=False, default="bank")  # bank, cash, western_union, other
     reference = Column(String(128))
     note = Column(Text)
-
     invoice = relationship("Invoice", back_populates="payments")
 
 class Expense(Base):
@@ -155,19 +151,16 @@ class Expense(Base):
     category = Column(String(64), nullable=False)  # Software, DGA Salary, Tax - Wage, Tax - CIT, Travel, Office...
     description = Column(Text, default="")
     currency = Column(String(8), nullable=False, default="EUR")
-
-    # VAT on purchases (input VAT)
-    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21/9/0/exempt: store 0 for exempt
+    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # store 0 for exempt or 0%
     amount_net = Column(Numeric(12, 2), nullable=False, default=0)
     vat_amount = Column(Numeric(12, 2), nullable=False, default=0)
     amount_gross = Column(Numeric(12, 2), nullable=False, default=0)
-
     receipt_path = Column(String(256))
 
-# Create tables (no destructive changes)
+# Create tables
 Base.metadata.create_all(engine)
 
-# One-time schema upgrade for rsin (for existing DBs)
+# One-time schema upgrade for rsin if DB existed before
 def ensure_schema_upgrades():
     insp = inspect(engine)
     if insp.has_table("company_settings"):
@@ -178,7 +171,7 @@ def ensure_schema_upgrades():
 ensure_schema_upgrades()
 
 # -------------------------------------------------
-# Utilities
+# Helpers
 # -------------------------------------------------
 def dec(x) -> Decimal:
     return Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -204,12 +197,11 @@ def ensure_company(db):
     row = db.get(CompanySettings, 1)
     if not row:
         row = CompanySettings(id=1)
-        db.add(row)
-        db.flush()
-    # Autofill missing fields with your defaults
-    for key, val in DEFAULT_COMPANY.items():
-        if not getattr(row, key, None):
-            setattr(row, key, val)
+        db.add(row); db.flush()
+    # autofill any missing field
+    for k, v in DEFAULT_COMPANY.items():
+        if not getattr(row, k, None):
+            setattr(row, k, v)
     db.commit()
     return row
 
@@ -220,16 +212,13 @@ def next_invoice_no(db, prefix: str) -> str:
     ).scalar_one_or_none()
     if not seq:
         seq = InvoiceSequence(year=year, prefix=prefix, last_seq=0)
-        db.add(seq)
-        db.flush()
+        db.add(seq); db.flush()
     seq.last_seq += 1
     db.flush()
     return f"{prefix}-{year}-{seq.last_seq:04d}"
 
 def recalc_invoice(inv: Invoice):
-    net = Decimal("0.00")
-    vat = Decimal("0.00")
-    gross = Decimal("0.00")
+    net = Decimal("0.00"); vat = Decimal("0.00"); gross = Decimal("0.00")
     for line in inv.lines:
         ln = dec(line.qty) * dec(line.unit_price)
         lr = dec(line.vat_rate)
@@ -237,12 +226,8 @@ def recalc_invoice(inv: Invoice):
         lt = (ln + lv).quantize(Decimal("0.01"))
         line.line_net = ln; line.line_vat = lv; line.line_total = lt
         net += ln; vat += lv; gross += lt
-
-    # VAT header schemes that zero out VAT on invoice
     if inv.vat_scheme in ("REVERSE_CHARGE_EU", "ZERO_OUTSIDE_EU", "EXEMPT"):
-        vat = Decimal("0.00")
-        gross = net
-
+        vat = Decimal("0.00"); gross = net
     inv.net_total = net.quantize(Decimal("0.01"))
     inv.vat_total = vat.quantize(Decimal("0.01"))
     inv.gross_total = gross.quantize(Decimal("0.01"))
@@ -262,68 +247,18 @@ def quarter_bounds(d: date):
     end = (start + relativedelta(months=3)) - relativedelta(days=1)
     return start, end
 
-def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
-    """Return list of warnings for Dutch invoice rules."""
-    warns = []
-    # Supplier details
-    if not company.company_name or not company.address or not company.city or not company.postcode:
-        warns.append("Company name/address/postcode/city missing in Company Settings.")
-    if not company.kvk:
-        warns.append("KVK number missing in Company Settings.")
-    if not company.rsin:
-        warns.append("RSIN missing in Company Settings.")
-    if inv.vat_scheme != "EXEMPT":
-        if not company.vat_number:
-            warns.append("Supplier VAT number missing in Company Settings.")
-        elif "[" in (company.vat_number or ""):
-            warns.append("Supplier VAT number looks like a placeholder. Replace with your real VAT number.")
-    if not company.iban or not company.bic:
-        warns.append("IBAN/BIC missing in Company Settings.")
+def vat_summary(db, year: int, quarter: int):
+    start_month = 3*(quarter-1)+1
+    q_start = date(year, start_month, 1)
+    q_end = (q_start + relativedelta(months=3)) - relativedelta(days=1)
 
-    # Customer details
-    if not inv.client_name or not inv.client_address:
-        warns.append("Customer name and address required on the invoice.")
-    if inv.vat_scheme == "REVERSE_CHARGE_EU" and not inv.client_vat_number:
-        warns.append("Customer VAT number required for reverse charge (BTW verlegd).")
-
-    # Invoice fields
-    if inv.supply_date is None:
-        warns.append("Supply/performance date is required on Dutch invoices.")
-    if not inv.lines:
-        warns.append("Invoice must contain at least one line with description, qty and unit price.")
-    return warns
-
-# -------------------------------------------------
-# Routes
-# -------------------------------------------------
-@app.route("/", methods=["GET"])
-def index():
-    db = get_db()
-    company = ensure_company(db)
-
-    today = date.today()
-    q_start, q_end = quarter_bounds(today)
-
-    # YTD
-    ytd_income = db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year, 1, 1))
-    ).scalar_one()
-    ytd_expenses = db.execute(
-        select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year, 1, 1))
-    ).scalar_one()
-
-    # VAT (quarter)
-    sales_21 = sales_9 = sales_0 = Decimal("0.00")
-    vat_out = Decimal("0.00")
-    ilines = db.execute(
-        select(InvoiceLine, Invoice).join(Invoice).where(
-            Invoice.issue_date >= q_start, Invoice.issue_date <= q_end
-        )
-    ).all()
-    for line, inv in ilines:
+    sales_21 = sales_9 = sales_0 = Decimal("0.00"); vat_out = Decimal("0.00")
+    rows = db.execute(select(InvoiceLine, Invoice).join(Invoice).where(
+        Invoice.issue_date >= q_start, Invoice.issue_date <= q_end
+    )).all()
+    for line, inv in rows:
         net = dec(line.line_net)
         if inv.vat_scheme == "REVERSE_CHARGE_EU":
-            # Shown without VAT here (customer accounts for VAT)
             pass
         elif inv.vat_scheme in ("ZERO_OUTSIDE_EU", "EXEMPT"):
             sales_0 += net
@@ -334,59 +269,149 @@ def index():
             else: sales_0 += net
             vat_out += dec(line.line_vat)
 
-    exp_rows = db.execute(select(Expense).where(Expense.date >= q_start, Expense.date <= q_end)).scalars().all()
-    vat_in = sum((dec(e.vat_amount) for e in exp_rows), Decimal("0.00"))
-    vat_due = (vat_out - vat_in).quantize(Decimal("0.01"))
+    vat_in = Decimal("0.00")
+    exps = db.execute(select(Expense).where(Expense.date >= q_start, Expense.date <= q_end)).scalars().all()
+    for e in exps:
+        vat_in += dec(e.vat_amount)
 
-    # Lists
+    return {
+        "q_start": q_start, "q_end": q_end,
+        "sales_21": sales_21.quantize(Decimal("0.01")),
+        "sales_9": sales_9.quantize(Decimal("0.01")),
+        "sales_0": sales_0.quantize(Decimal("0.01")),
+        "vat_out": vat_out.quantize(Decimal("0.01")),
+        "vat_in": vat_in.quantize(Decimal("0.01")),
+        "vat_due": (vat_out - vat_in).quantize(Decimal("0.01")),
+    }
+
+def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
+    warns = []
+    if not company.company_name or not company.address or not company.city or not company.postcode:
+        warns.append("Company name/address/postcode/city missing in Company Settings.")
+    if not company.kvk: warns.append("KVK number missing in Company Settings.")
+    if not company.rsin: warns.append("RSIN missing in Company Settings.")
+    if inv.vat_scheme != "EXEMPT":
+        if not company.vat_number:
+            warns.append("Supplier VAT number missing in Company Settings.")
+        elif "[" in (company.vat_number or ""):
+            warns.append("Supplier VAT number looks like a placeholder. Replace with your real VAT number.")
+    if not company.iban or not company.bic:
+        warns.append("IBAN/BIC missing in Company Settings.")
+    if not inv.client_name or not inv.client_address:
+        warns.append("Customer name and address are required.")
+    if inv.vat_scheme == "REVERSE_CHARGE_EU" and not inv.client_vat_number:
+        warns.append("Customer VAT number required for reverse charge (BTW verlegd).")
+    if inv.supply_date is None:
+        warns.append("Supply/performance date is required.")
+    if not inv.lines:
+        warns.append("Invoice must contain at least one line.")
+    return warns
+
+# -------------------------------------------------
+# Routes — PAGES
+# -------------------------------------------------
+@app.route("/")
+def dashboard():
+    db = get_db(); company = ensure_company(db)
+    today = date.today()
+    ytd_income = db.execute(select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year,1,1))).scalar_one()
+    ytd_expenses = db.execute(select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year,1,1))).scalar_one()
+    q_start, q_end = quarter_bounds(today)
+    vat = vat_summary(db, today.year, ((today.month - 1)//3)+1)
+
     recent_invoices = db.execute(select(Invoice).order_by(Invoice.issue_date.desc()).limit(6)).scalars().all()
-    unpaid_invoices = db.execute(
-        select(Invoice).where(Invoice.status.in_(("SENT","PARTIAL"))).order_by(Invoice.due_date.asc()).limit(6)
-    ).scalars().all()
-    recent_expenses = db.execute(select(Expense).order_by(Expense.date.desc()).limit(8)).scalars().all()
-    recent_payments = db.execute(select(Payment).order_by(Payment.date.desc()).limit(8)).scalars().all()
+    recent_expenses = db.execute(select(Expense).order_by(Expense.date.desc()).limit(6)).scalars().all()
+    recent_payments = db.execute(select(Payment).order_by(Payment.date.desc()).limit(6)).scalars().all()
 
-    return render_template(
-        "index.html",
-        csrf_token=csrf_token(),
-        company=company,
-        ytd_income=dec(ytd_income),
-        ytd_expenses=dec(ytd_expenses),
-        q_start=q_start, q_end=q_end,
-        sales_21=sales_21.quantize(Decimal("0.01")),
-        sales_9=sales_9.quantize(Decimal("0.01")),
-        sales_0=sales_0.quantize(Decimal("0.01")),
-        vat_out=vat_out.quantize(Decimal("0.01")),
-        vat_in=vat_in.quantize(Decimal("0.01")),
-        vat_due=vat_due,
-        recent_invoices=recent_invoices,
-        unpaid_invoices=unpaid_invoices,
-        recent_expenses=recent_expenses,
-        recent_payments=recent_payments
+    return render_template("dashboard.html",
+        csrf_token=csrf_token(), company=company,
+        ytd_income=dec(ytd_income), ytd_expenses=dec(ytd_expenses),
+        **vat, recent_invoices=recent_invoices, recent_expenses=recent_expenses, recent_payments=recent_payments
     )
 
+@app.route("/settings")
+def settings_page():
+    db = get_db(); company = ensure_company(db)
+    return render_template("settings.html", csrf_token=csrf_token(), company=company)
+
+@app.route("/invoices")
+def invoices_list():
+    db = get_db(); company = ensure_company(db)
+    status = request.args.get("status")
+    q = select(Invoice)
+    if status:
+        q = q.where(Invoice.status == status)
+    q = q.order_by(Invoice.issue_date.desc())
+    invoices = db.execute(q).scalars().all()
+    return render_template("invoices_list.html", csrf_token=csrf_token(), company=company, invoices=invoices, status=status)
+
+@app.route("/invoices/new")
+def invoice_new_page():
+    db = get_db(); company = ensure_company(db)
+    return render_template("invoice_new.html", csrf_token=csrf_token(), company=company)
+
+@app.route("/invoice/<int:invoice_id>")
+def invoice_detail(invoice_id):
+    db = get_db(); company = ensure_company(db)
+    inv = db.get(Invoice, invoice_id)
+    if not inv:
+        flash("Invoice not found.", "warning"); return redirect(url_for("invoices_list"))
+    warns = compliance_warnings(company, inv)
+    return render_template("invoice_detail.html", csrf_token=csrf_token(), company=company, inv=inv, warns=warns)
+
+@app.route("/expenses")
+def expenses_list():
+    db = get_db(); company = ensure_company(db)
+    expenses = db.execute(select(Expense).order_by(Expense.date.desc())).scalars().all()
+    return render_template("expenses_list.html", csrf_token=csrf_token(), company=company, expenses=expenses)
+
+@app.route("/expenses/new")
+def expense_new_page():
+    db = get_db(); company = ensure_company(db)
+    return render_template("expense_new.html", csrf_token=csrf_token(), company=company)
+
+@app.route("/income/new")
+def income_new_page():
+    db = get_db(); company = ensure_company(db)
+    return render_template("income_new.html", csrf_token=csrf_token(), company=company)
+
+@app.route("/reports/vat")
+def vat_report():
+    db = get_db(); company = ensure_company(db)
+    year = int(request.args.get("year", date.today().year))
+    q = int(request.args.get("q", ((date.today().month - 1)//3)+1))
+    q = max(1, min(4, q))
+    data = vat_summary(db, year, q)
+    return render_template("dashboard.html",  # reuse dashboard layout section for VAT box
+        csrf_token=csrf_token(), company=company,
+        ytd_income=Decimal("0.00"), ytd_expenses=Decimal("0.00"),
+        **data, recent_invoices=[], recent_expenses=[], recent_payments=[]
+    )
+
+# -------------------------------------------------
+# Routes — ACTIONS (POST)
+# -------------------------------------------------
 @app.route("/settings/save", methods=["POST"])
 def save_settings():
     try:
-        require_csrf(request.form.get("csrf_token", ""))
+        require_csrf(request.form.get("csrf_token",""))
         db = get_db(); company = ensure_company(db)
         company.company_name = request.form.get("company_name","").strip()
-        company.address = request.form.get("address","").strip()
-        company.city = request.form.get("city","").strip()
-        company.postcode = request.form.get("postcode","").strip()
-        company.country = request.form.get("country","Netherlands").strip()
         company.kvk = request.form.get("kvk","").strip()
         company.rsin = request.form.get("rsin","").strip()
         company.vat_number = request.form.get("vat_number","").strip()
+        company.invoice_prefix = request.form.get("invoice_prefix","INV").strip() or "INV"
         company.iban = request.form.get("iban","").strip()
         company.bic = request.form.get("bic","").strip()
-        company.invoice_prefix = request.form.get("invoice_prefix","INV").strip() or "INV"
+        company.address = request.form.get("address","").strip()
+        company.postcode = request.form.get("postcode","").strip()
+        company.city = request.form.get("city","").strip()
+        company.country = request.form.get("country","Netherlands").strip()
         db.commit()
         flash("Company settings saved.", "success")
     except Exception as e:
-        get_db().rollback()
-        flash(f"Settings error: {e}", "danger")
-    return redirect(url_for("index"))
+        get_db().rollback(); flash(f"Settings error: {e}", "danger")
+    return redirect(url_for("settings_page"))
 
 @app.route("/invoice/create", methods=["POST"])
 def create_invoice():
@@ -414,33 +439,28 @@ def create_invoice():
         )
         db.add(inv); db.flush()
 
-        # Lines
+        # lines
         descs = request.form.getlist("line_desc")
         qtys = request.form.getlist("line_qty")
         prices = request.form.getlist("line_price")
         vats = request.form.getlist("line_vat")
         for i in range(len(descs)):
             d = (descs[i] or "").strip()
-            if not d:
-                continue
+            if not d: continue
             q = dec(qtys[i] or "0")
             up = dec(prices[i] or "0")
             vr = dec(vats[i] or "0")
-            line = InvoiceLine(invoice_id=inv.id, description=d, qty=q, unit_price=up, vat_rate=vr)
-            db.add(line)
+            db.add(InvoiceLine(invoice_id=inv.id, description=d, qty=q, unit_price=up, vat_rate=vr))
         db.flush()
+
         recalc_invoice(inv); update_status(inv)
-
-        # Compliance warnings
-        for w in compliance_warnings(company, inv):
-            flash("Invoice warning: " + w, "warning")
-
+        for w in compliance_warnings(company, inv): flash("Invoice warning: " + w, "warning")
         db.commit()
         flash(f"Invoice {inv.invoice_no} created.", "success")
+        return redirect(url_for("invoice_detail", invoice_id=inv.id))
     except Exception as e:
-        db.rollback()
-        flash(f"Create invoice error: {e}", "danger")
-    return redirect(url_for("index"))
+        db.rollback(); flash(f"Create invoice error: {e}", "danger")
+        return redirect(url_for("invoice_new_page"))
 
 @app.route("/invoice/<int:invoice_id>/pay", methods=["POST"])
 def pay_invoice(invoice_id):
@@ -449,20 +469,18 @@ def pay_invoice(invoice_id):
         require_csrf(request.form.get("csrf_token",""))
         inv = db.get(Invoice, invoice_id)
         if not inv:
-            flash("Invoice not found.", "warning"); return redirect(url_for("index"))
+            flash("Invoice not found.", "warning"); return redirect(url_for("invoices_list"))
         amount = dec(request.form["amount"])
         pay_date = datetime.strptime(request.form["date"], "%Y-%m-%d").date()
         method = request.form.get("method","bank")
         reference = request.form.get("reference","").strip()
         note = request.form.get("note","").strip()
-        p = Payment(invoice_id=invoice_id, date=pay_date, amount=amount, method=method, reference=reference, note=note)
-        db.add(p); db.flush()
-        update_status(inv); db.commit()
+        db.add(Payment(invoice_id=invoice_id, date=pay_date, amount=amount, method=method, reference=reference, note=note))
+        db.flush(); update_status(inv); db.commit()
         flash(f"Payment €{amount} recorded for {inv.invoice_no}.", "success")
     except Exception as e:
-        db.rollback()
-        flash(f"Payment error: {e}", "danger")
-    return redirect(url_for("index"))
+        db.rollback(); flash(f"Payment error: {e}", "danger")
+    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
 
 @app.route("/income/add", methods=["POST"])
 def add_income():
@@ -474,13 +492,11 @@ def add_income():
         method = request.form.get("method","bank")
         reference = request.form.get("reference","").strip()
         note = request.form.get("note","").strip()
-        p = Payment(invoice_id=None, date=pay_date, amount=amount, method=method, reference=reference, note=note)
-        db.add(p); db.commit()
-        flash(f"Income €{amount} saved.", "success")
+        db.add(Payment(invoice_id=None, date=pay_date, amount=amount, method=method, reference=reference, note=note))
+        db.commit(); flash(f"Income €{amount} saved.", "success")
     except Exception as e:
-        db.rollback()
-        flash(f"Income error: {e}", "danger")
-    return redirect(url_for("index"))
+        db.rollback(); flash(f"Income error: {e}", "danger")
+    return redirect(url_for("income_new_page"))
 
 @app.route("/expense/add", methods=["POST"])
 def add_expense():
@@ -495,10 +511,8 @@ def add_expense():
         amount_gross = dec(request.form["amount_gross"])
         vat_rate = dec(request.form.get("vat_rate","21"))
 
-        # Compute net and VAT
         if vat_rate <= Decimal("0"):
-            amount_net = amount_gross
-            vat_amount = Decimal("0.00")
+            amount_net = amount_gross; vat_amount = Decimal("0.00")
         else:
             amount_net = (amount_gross / (Decimal("1.00") + vat_rate/Decimal("100"))).quantize(Decimal("0.01"))
             vat_amount = (amount_gross - amount_net).quantize(Decimal("0.01"))
@@ -513,17 +527,15 @@ def add_expense():
             file.save(os.path.join(app.config["UPLOAD_FOLDER"], fname))
             receipt_path = fname
 
-        e = Expense(
+        db.add(Expense(
             date=exp_date, vendor=vendor, category=category, description=description, currency=currency,
             vat_rate=vat_rate, amount_net=amount_net, vat_amount=vat_amount, amount_gross=amount_gross,
             receipt_path=receipt_path
-        )
-        db.add(e); db.commit()
-        flash("Expense saved.", "success")
+        ))
+        db.commit(); flash("Expense saved.", "success")
     except Exception as e:
-        db.rollback()
-        flash(f"Expense error: {e}", "danger")
-    return redirect(url_for("index"))
+        db.rollback(); flash(f"Expense error: {e}", "danger")
+    return redirect(url_for("expense_new_page"))
 
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
