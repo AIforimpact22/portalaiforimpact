@@ -1,81 +1,85 @@
 {% extends "base.html" %}
-{% block title %}Create Invoice · BV Management{% endblock %}
+{% block title %}Invoice {{ inv.invoice_no }} · BV Management{% endblock %}
 {% block content %}
-  <div class="h1">Create Invoice</div>
-  <form method="post" action="{{ url_for('create_invoice') }}" class="card section" id="invForm">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="h1">Invoice {{ inv.invoice_no }}</div>
 
-    <div class="grid" style="grid-template-columns:1fr 1fr">
-      <div><label>Issue date</label><input type="date" name="issue_date" required></div>
-      <div><label>Supply date</label><input type="date" name="supply_date" required></div>
-      <div><label>Due date</label><input type="date" name="due_date" required></div>
-      <div><label>Currency</label><select name="currency"><option value="EUR" selected>EUR</option></select></div>
+  {% if warns and warns|length %}
+    <div class="card warn"><div class="h2">Compliance warnings</div>
+      <ul>{% for w in warns %}<li>{{ w }}</li>{% endfor %}</ul>
     </div>
+  {% endif %}
 
-    <div class="grid section" style="grid-template-columns:1fr 1fr">
-      <div><label>Customer name</label><input name="client_name" required></div>
-      <div><label>Customer VAT (if reverse charge)</label><input name="client_vat_number" placeholder="EU VAT (BTW verlegd)"></div>
-      <div style="grid-column:1 / span 2"><label>Customer address</label><textarea name="client_address" rows="2" required></textarea></div>
-      <div>
-        <label>VAT scheme</label>
-        <select name="vat_scheme" id="vat_scheme">
-          <option value="STANDARD" selected>STANDARD (charge 21/9/0)</option>
-          <option value="REVERSE_CHARGE_EU">Reverse charge (BTW verlegd)</option>
-          <option value="ZERO_OUTSIDE_EU">0% export outside EU</option>
-          <option value="EXEMPT">Exempt</option>
-        </select>
-      </div>
-      <div><label>Notes</label><input name="notes" placeholder="e.g., BTW verlegd art. 12 Wet OB"></div>
+  <div class="grid section" style="grid-template-columns: 1fr 1fr">
+    <div class="card">
+      <div class="h2">Header</div>
+      <div class="mut">Issue: {{ inv.issue_date }} • Supply: {{ inv.supply_date }} • Due: {{ inv.due_date }} • {{ inv.currency }}</div>
+      <div class="mut">VAT scheme: {{ inv.vat_scheme }}</div>
+      <div class="mut">Status: {{ inv.status }}</div>
+      <div class="mut">Notes: {{ inv.notes or '—' }}</div>
     </div>
-
-    <div class="h2 section">Lines</div>
-    <div id="lines">
-      <div class="row" style="gap:8px;align-items:center">
-        <input name="line_desc" placeholder="Description" required style="flex:3">
-        <input name="line_qty" type="number" step="0.01" placeholder="Qty" value="1" required style="flex:1">
-        <input name="line_price" type="number" step="0.01" placeholder="Unit price" required style="flex:1">
-        <select name="line_vat" class="line-vat" style="flex:1">
-          <option value="21">21%</option><option value="9">9%</option><option value="0" selected>0%</option>
-        </select>
-        <button type="button" onclick="removeLine(this)">✕</button>
-      </div>
+    <div class="card">
+      <div class="h2">Customer</div>
+      <div>{{ inv.client_name }}</div>
+      <div class="mut">{{ inv.client_address }}</div>
+      <div class="mut">VAT: {{ inv.client_vat_number or '—' }}</div>
     </div>
-    <div class="row section"><button type="button" onclick="addLine()">+ Add line</button></div>
+  </div>
 
-    <div class="row right section"><button>Create Invoice</button></div>
-  </form>
-{% endblock %}
+  <div class="card section">
+    <div class="h2">Lines</div>
+    <table>
+      <thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>VAT %</th><th>Net</th><th>VAT</th><th>Total</th></tr></thead>
+      <tbody>
+      {% for l in inv.lines %}
+        <tr>
+          <td>{{ l.description }}</td>
+          <td>{{ '%.2f'|format(l.qty) }}</td>
+          <td>€ {{ '%.2f'|format(l.unit_price) }}</td>
+          <td>{{ '%.2f'|format(l.vat_rate) }}</td>
+          <td>€ {{ '%.2f'|format(l.line_net) }}</td>
+          <td>€ {{ '%.2f'|format(l.line_vat) }}</td>
+          <td>€ {{ '%.2f'|format(l.line_total) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="row right" style="gap:24px">
+      <div>Net: <strong>€ {{ '%.2f'|format(inv.net_total) }}</strong></div>
+      <div>VAT: <strong>€ {{ '%.2f'|format(inv.vat_total) }}</strong></div>
+      <div>Gross: <strong>€ {{ '%.2f'|format(inv.gross_total) }}</strong></div>
+      <div>Paid: <strong>€ {{ '%.2f'|format(inv.paid_total) }}</strong></div>
+      <div>Balance: <strong>€ {{ '%.2f'|format(inv.balance) }}</strong></div>
+    </div>
+  </div>
 
-{% block scripts %}
-<script>
-  const vatScheme = document.getElementById('vat_scheme');
-  function syncVatOptions(){
-    const rc = vatScheme.value === 'REVERSE_CHARGE_EU';
-    const zero = vatScheme.value === 'ZERO_OUTSIDE_EU' || vatScheme.value === 'EXEMPT';
-    document.querySelectorAll('.line-vat').forEach(sel => {
-      if (rc || zero) { sel.value = '0'; sel.disabled = true; }
-      else { sel.disabled = false; }
-    });
-  }
-  if(vatScheme){ vatScheme.addEventListener('change', syncVatOptions); syncVatOptions(); }
-
-  function addLine(){
-    const row = document.createElement('div');
-    row.className = 'row'; row.style.gap='8px'; row.style.alignItems='center';
-    row.innerHTML = `
-      <input name="line_desc" placeholder="Description" required style="flex:3">
-      <input name="line_qty" type="number" step="0.01" placeholder="Qty" value="1" required style="flex:1">
-      <input name="line_price" type="number" step="0.01" placeholder="Unit price" required style="flex:1">
-      <select name="line_vat" class="line-vat" style="flex:1">
-        <option value="21">21%</option><option value="9">9%</option><option value="0" selected>0%</option>
-      </select>
-      <button type="button" onclick="removeLine(this)">✕</button>`;
-    document.getElementById('lines').appendChild(row);
-    syncVatOptions();
-  }
-  function removeLine(btn){
-    const parent = btn.closest('.row');
-    if(parent && document.querySelectorAll('#lines .row').length > 1){ parent.remove(); }
-  }
-</script>
+  <div class="grid section" style="grid-template-columns: 2fr 1fr">
+    <div class="card">
+      <div class="h2">Payments</div>
+      <table>
+        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead>
+        <tbody>
+        {% for p in inv.payments %}
+          <tr><td>{{ p.date }}</td><td>€ {{ '%.2f'|format(p.amount) }}</td><td>{{ p.method }}</td><td>{{ p.reference or '' }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="h2">Record Payment</div>
+      <form method="post" action="{{ url_for('pay_invoice', invoice_id=inv.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="row">
+          <input type="date" name="date" required style="flex:1">
+          <input type="number" step="0.01" name="amount" value="{{ '%.2f'|format(inv.balance) }}" style="flex:1">
+        </div>
+        <div class="row section">
+          <select name="method" style="flex:1">
+            <option value="bank">Bank</option><option value="western_union">Western Union</option><option value="cash">Cash</option><option value="other">Other</option>
+          </select>
+          <input name="reference" placeholder="Ref" style="flex:1">
+        </div>
+        <div class="row right section"><button>Record</button></div>
+      </form>
+    </div>
+  </div>
 {% endblock %}
