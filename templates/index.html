@@ -2,288 +2,372 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>BV Management Dashboard</title>
+  <title>BV Management (Dutch-compliant)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <style>
     :root { --bg:#0f1226; --panel:#171a33; --mut:#9aa3b2; --hi:#f3f4f6; --acc:#7c5cff; --green:#22c55e; --red:#ef4444; }
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--hi);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
-    a{color:var(--acc);text-decoration:none} .container{max-width:1100px;margin:0 auto;padding:24px}
+    a{color:var(--acc);text-decoration:none} .container{max-width:1200px;margin:0 auto;padding:24px}
     .grid{display:grid;gap:16px} .grid.cards{grid-template-columns:repeat(auto-fit,minmax(230px,1fr))}
     .card{background:var(--panel);border-radius:12px;padding:16px;border:1px solid rgba(255,255,255,.06)}
-    .mut{color:var(--mut);font-size:12px}
-    .h1{font-size:22px;font-weight:700;margin:0 0 8px} .h2{font-size:16px;font-weight:700;margin:0 0 8px}
-    .row{display:flex;gap:12px;flex-wrap:wrap} input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#121533;color:#fff}
+    .mut{color:var(--mut);font-size:12px} .h1{font-size:22px;font-weight:700;margin:0 0 8px}
+    .h2{font-size:16px;font-weight:700;margin:0 0 8px} .row{display:flex;gap:12px;flex-wrap:wrap}
+    input,select,textarea{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.08);background:#121533;color:#fff}
     label{font-size:12px;color:var(--mut)} button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;background:var(--acc);color:#fff;font-weight:600}
     table{width:100%;border-collapse:separate;border-spacing:0 8px} th,td{padding:10px 12px;text-align:left}
-    tr{background:rgba(255,255,255,.03)} tr:hover{background:rgba(255,255,255,.05)}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
-    .success{color:var(--green)} .danger{color:var(--red)} .right{justify-content:flex-end}
-    .flex{display:flex;align-items:center;gap:12px} .mt8{margin-top:8px} .mt16{margin-top:16px} .mt24{margin-top:24px}
-    .grid.cols-2{grid-template-columns:repeat(2,1fr)} .grid.cols-3{grid-template-columns:repeat(3,1fr)}
-    .sticky{position:sticky;top:0;background:var(--bg);padding:16px 0;margin:-24px 0 16px;z-index:2;border-bottom:1px solid rgba(255,255,255,.06)}
-    .flash{padding:10px 12px;border-radius:10px;margin:8px 0}
+    tr{background:rgba(255,255,255,.03)} tr:hover{background:rgba(255,255,255,.05)} .right{justify-content:flex-end}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px} .flash{padding:10px 12px;border-radius:10px;margin:8px 0}
+    .mt8{margin-top:8px}.mt16{margin-top:16px}.mt24{margin-top:24px}.mt32{margin-top:32px}.col-2{grid-template-columns:repeat(2,1fr)}
+    .warn{border-left:5px solid #f59e0b} .ok{border-left:5px solid #22c55e} .err{border-left:5px solid #ef4444}
+    .section{margin-top:24px}
+    .line-row{display:grid;grid-template-columns:2fr 0.6fr 0.8fr 0.8fr auto;gap:8px;align-items:center;margin-bottom:8px}
+    .add-line{background:#0ea5e9}
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="sticky">
-      <div class="flex" style="justify-content:space-between">
-        <div class="h1">BV Management Dashboard</div>
-        <div class="mut">Currency: EUR • All dates local</div>
-      </div>
-    </div>
+<div class="container">
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      {% for cat,msg in messages %}
-        <div class="flash card" style="border-left:5px solid {% if cat=='success' %}var(--green){% elif cat=='danger' %}var(--red){% else %}var(--acc){% endif %}">
-          {{ msg }}
+  <div class="h1">BV Management Dashboard (Dutch rules)</div>
+  <div class="mut">Keep invoices sequential, include supplier & customer details, track VAT on sales/expenses, and get a quarterly VAT summary.</div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for cat,msg in messages %}
+      <div class="flash card {% if cat=='success' %}ok{% elif cat=='danger' %}err{% elif cat=='warning' %}warn{% endif %}">
+        {{ msg }}
+      </div>
+    {% endfor %}
+  {% endif %}
+  {% endwith %}
+
+  <!-- KPIs -->
+  <div class="grid cards mt16">
+    <div class="card"><div class="mut">YTD Income</div><div class="h1">€ {{ '%.2f'|format(ytd_income) }}</div></div>
+    <div class="card"><div class="mut">YTD Expenses (gross)</div><div class="h1">€ {{ '%.2f'|format(ytd_expenses) }}</div></div>
+    <div class="card">
+      <div class="mut">VAT summary ({{ q_start }} → {{ q_end }})</div>
+      <div>Sales 21%: € {{ '%.2f'|format(sales_21) }}</div>
+      <div>Sales 9%: € {{ '%.2f'|format(sales_9) }}</div>
+      <div>Sales 0%/Exempt: € {{ '%.2f'|format(sales_0) }}</div>
+      <div class="mt8">Output VAT: € {{ '%.2f'|format(vat_out) }}</div>
+      <div>Input VAT: € {{ '%.2f'|format(vat_in) }}</div>
+      <div class="h2 mt8">Net VAT due: € {{ '%.2f'|format(vat_due) }}</div>
+      <div class="mut mt8">Note: Reverse‑charge sales (BTW verlegd) show as net without VAT here.</div>
+    </div>
+  </div>
+
+  <!-- Company Settings -->
+  <div class="card section">
+    <div class="h2">Company Settings (required on Dutch invoices)</div>
+    <form method="post" action="{{ url_for('save_settings') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid col-2">
+        <div>
+          <label>Company name</label>
+          <input name="company_name" value="{{ company.company_name }}" required>
         </div>
-      {% endfor %}
+        <div>
+          <label>KVK</label>
+          <input name="kvk" value="{{ company.kvk }}" required>
+        </div>
+      </div>
+      <div class="grid col-2 mt8">
+        <div>
+          <label>VAT number (BTW-nummer)</label>
+          <input name="vat_number" value="{{ company.vat_number }}" placeholder="e.g., NL123456789B01">
+        </div>
+        <div>
+          <label>Invoice prefix</label>
+          <input name="invoice_prefix" value="{{ company.invoice_prefix or 'INV' }}">
+        </div>
+      </div>
+      <div class="grid col-2 mt8">
+        <div>
+          <label>IBAN</label>
+          <input name="iban" value="{{ company.iban }}">
+        </div>
+        <div>
+          <label>BIC</label>
+          <input name="bic" value="{{ company.bic }}">
+        </div>
+      </div>
+      <div class="grid col-2 mt8">
+        <div>
+          <label>Address</label>
+          <textarea name="address" rows="2" placeholder="Street, number">{{ company.address }}</textarea>
+        </div>
+        <div>
+          <label>Postcode, City, Country</label>
+          <div class="row">
+            <input name="postcode" placeholder="Postcode" value="{{ company.postcode }}" style="flex:1">
+            <input name="city" placeholder="City" value="{{ company.city }}" style="flex:1">
+            <input name="country" placeholder="Country" value="{{ company.country }}" style="flex:1">
+          </div>
+        </div>
+      </div>
+      <div class="row right mt16"><button>Save</button></div>
+    </form>
+    <div class="mut mt8">Tip: Include KVK and VAT number on every invoice; keep records 7+ years.</div>
+  </div>
+
+  <!-- Create Invoice -->
+  <div class="card section">
+    <div class="h2">Create Invoice (Dutch-compliant)</div>
+    <form method="post" action="{{ url_for('create_invoice') }}" id="invForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="grid col-2">
+        <div>
+          <label>Issue date</label>
+          <input type="date" name="issue_date" required>
+        </div>
+        <div>
+          <label>Supply date (performance)</label>
+          <input type="date" name="supply_date" required>
+        </div>
+      </div>
+
+      <div class="grid col-2 mt8">
+        <div>
+          <label>Due date</label>
+          <input type="date" name="due_date" required>
+        </div>
+        <div>
+          <label>Currency</label>
+          <select name="currency"><option value="EUR" selected>EUR</option></select>
+        </div>
+      </div>
+
+      <div class="grid col-2 mt8">
+        <div>
+          <label>Customer name</label>
+          <input name="client_name" required>
+        </div>
+        <div>
+          <label>Customer VAT (if reverse charge)</label>
+          <input name="client_vat_number" placeholder="EU VAT number of customer (if BTW verlegd)">
+        </div>
+      </div>
+      <div class="mt8">
+        <label>Customer address</label>
+        <textarea name="client_address" rows="2" required></textarea>
+      </div>
+
+      <div class="grid col-2 mt8">
+        <div>
+          <label>VAT scheme</label>
+          <select name="vat_scheme" id="vat_scheme">
+            <option value="STANDARD" selected>STANDARD (charge 21%/9%/0%)</option>
+            <option value="REVERSE_CHARGE_EU">Reverse charge (BTW verlegd)</option>
+            <option value="ZERO_OUTSIDE_EU">0% export outside EU</option>
+            <option value="EXEMPT">Exempt</option>
+          </select>
+        </div>
+        <div>
+          <label>Notes (e.g., “BTW verlegd art. 12 Wet OB”)</label>
+          <input name="notes" placeholder="Optional legal note">
+        </div>
+      </div>
+
+      <div class="mt16"><div class="h2">Lines</div></div>
+
+      <div id="lines">
+        <div class="line-row">
+          <input name="line_desc" placeholder="Description" required>
+          <input name="line_qty" type="number" step="0.01" placeholder="Qty" value="1" required>
+          <input name="line_price" type="number" step="0.01" placeholder="Unit price" required>
+          <select name="line_vat" class="line-vat">
+            <option value="21">21%</option>
+            <option value="9">9%</option>
+            <option value="0" selected>0%</option>
+          </select>
+          <button type="button" onclick="removeLine(this)">✕</button>
+        </div>
+      </div>
+
+      <div class="row mt8">
+        <button type="button" class="add-line" onclick="addLine()">+ Add line</button>
+      </div>
+
+      <div class="row right mt16">
+        <button>Create Invoice</button>
+      </div>
+    </form>
+    <div class="mut mt8">
+      Rules: Include supplier & customer details, invoice & supply dates, unique number (auto), description & quantities, applicable VAT rate/amount. Use “Reverse charge” for EU B2B when VAT shifts to customer; use 0% for exports outside EU.
+    </div>
+  </div>
+
+  <!-- Unpaid invoices quick-pay -->
+  <div class="card section">
+    <div class="h2">Unpaid Invoices</div>
+    {% if unpaid_invoices|length == 0 %}
+      <div class="mut">No unpaid invoices.</div>
+    {% else %}
+      <table>
+        <thead><tr><th>Invoice</th><th>Client</th><th>Due</th><th>Status</th><th>Balance</th><th>Pay</th></tr></thead>
+        <tbody>
+        {% for inv in unpaid_invoices %}
+          <tr>
+            <td>{{ inv.invoice_no }}</td>
+            <td>{{ inv.client_name }}</td>
+            <td>{{ inv.due_date }}</td>
+            <td>{{ inv.status }}</td>
+            <td>€ {{ '%.2f'|format(inv.balance) }}</td>
+            <td>
+              <form method="post" action="{{ url_for('pay_invoice', invoice_id=inv.id) }}" class="row">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="date" name="date" required style="width:150px">
+                <input type="number" step="0.01" name="amount" value="{{ '%.2f'|format(inv.balance) }}" style="width:120px">
+                <select name="method" style="width:160px">
+                  <option value="bank">Bank</option>
+                  <option value="western_union">Western Union</option>
+                  <option value="cash">Cash</option>
+                  <option value="other">Other</option>
+                </select>
+                <input name="reference" placeholder="Ref" style="width:140px">
+                <button>Record</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
     {% endif %}
-    {% endwith %}
+  </div>
 
-    <div class="grid cards">
-      <div class="card">
-        <div class="mut">MTD Income</div>
-        <div class="h1">€ {{ '%.2f'|format(mtd_income) }}</div>
-      </div>
-      <div class="card">
-        <div class="mut">MTD Expenses</div>
-        <div class="h1">€ {{ '%.2f'|format(mtd_expenses) }}</div>
-      </div>
-      <div class="card">
-        <div class="mut">YTD Income</div>
-        <div class="h1">€ {{ '%.2f'|format(ytd_income) }}</div>
-      </div>
-      <div class="card">
-        <div class="mut">YTD Expenses</div>
-        <div class="h1">€ {{ '%.2f'|format(ytd_expenses) }}</div>
-      </div>
+  <!-- Record standalone income -->
+  <div class="grid col-2 section">
+    <div class="card">
+      <div class="h2">Record Income (No Invoice)</div>
+      <form method="post" action="{{ url_for('add_income') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grid col-2">
+          <div><label>Date</label><input type="date" name="date" required></div>
+          <div><label>Amount</label><input type="number" step="0.01" name="amount" required></div>
+        </div>
+        <div class="grid col-2 mt8">
+          <div>
+            <label>Method</label>
+            <select name="method">
+              <option value="bank">Bank</option>
+              <option value="western_union">Western Union</option>
+              <option value="cash">Cash</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div><label>Reference</label><input name="reference" placeholder="Bank/WO ref"></div>
+        </div>
+        <div class="mt8"><label>Note</label><input name="note" placeholder="Optional"></div>
+        <div class="row right mt16"><button>Save Income</button></div>
+      </form>
     </div>
 
-    <div class="grid cols-2 mt24">
-      <!-- Create Invoice -->
-      <div class="card">
-        <div class="h2">Create Invoice</div>
-        <form method="post" action="{{ url_for('create_invoice') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div class="grid cols-2">
-            <div>
-              <label>Invoice No (auto if blank)</label>
-              <input name="invoice_no" placeholder="{{ next_invoice_guess }}">
-            </div>
-            <div>
-              <label>Client name</label>
-              <input name="client_name" required>
-            </div>
+    <!-- Record expense with VAT -->
+    <div class="card">
+      <div class="h2">Add Expense (with VAT)</div>
+      <form method="post" enctype="multipart/form-data" action="{{ url_for('add_expense') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="grid col-2">
+          <div><label>Date</label><input type="date" name="date" required></div>
+          <div><label>Gross amount (incl. VAT)</label><input type="number" step="0.01" name="amount_gross" required></div>
+        </div>
+        <div class="grid col-2 mt8">
+          <div><label>VAT rate</label>
+            <select name="vat_rate">
+              <option value="21" selected>21%</option>
+              <option value="9">9%</option>
+              <option value="0">0% / Exempt</option>
+            </select>
           </div>
-          <div class="grid cols-2 mt8">
-            <div>
-              <label>Issue date</label>
-              <input type="date" name="issue_date" value="{{ (cycler).current_date if false else '' }}" required>
-            </div>
-            <div>
-              <label>Due date</label>
-              <input type="date" name="due_date" required>
-            </div>
+          <div><label>Currency</label><select name="currency"><option value="EUR" selected>EUR</option></select></div>
+        </div>
+        <div class="grid col-2 mt8">
+          <div><label>Vendor</label><input name="vendor" required></div>
+          <div><label>Category</label><input name="category" list="cats" placeholder="e.g., Software" required>
+            <datalist id="cats">
+              <option>Software</option><option>DGA Salary</option><option>Tax - Wage</option>
+              <option>Tax - CIT</option><option>Travel</option><option>Office</option>
+            </datalist>
           </div>
-          <div class="grid cols-3 mt8">
-            <div>
-              <label>Amount</label>
-              <input type="number" step="0.01" name="amount" required>
-            </div>
-            <div>
-              <label>Currency</label>
-              <select name="currency">
-                <option value="EUR" selected>EUR</option>
-              </select>
-            </div>
-            <div>
-              <label>Notes</label>
-              <input name="notes" placeholder="Optional">
-            </div>
-          </div>
-          <div class="row right mt16"><button>Create</button></div>
-        </form>
-      </div>
-
-      <!-- Record Income (standalone) -->
-      <div class="card">
-        <div class="h2">Record Income (No Invoice)</div>
-        <form method="post" action="{{ url_for('add_income') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div class="grid cols-3">
-            <div>
-              <label>Date</label>
-              <input type="date" name="date" required>
-            </div>
-            <div>
-              <label>Amount</label>
-              <input type="number" step="0.01" name="amount" required>
-            </div>
-            <div>
-              <label>Method</label>
-              <select name="method">
-                <option value="bank">Bank</option>
-                <option value="western_union">Western Union</option>
-                <option value="cash">Cash</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          </div>
-          <div class="grid cols-2 mt8">
-            <div>
-              <label>Reference</label>
-              <input name="reference" placeholder="e.g., bank ref">
-            </div>
-            <div>
-              <label>Note</label>
-              <input name="note" placeholder="Optional">
-            </div>
-          </div>
-          <div class="row right mt16"><button>Save Income</button></div>
-        </form>
-      </div>
+        </div>
+        <div class="mt8"><label>Description</label><input name="description" placeholder="Optional notes"></div>
+        <div class="mt8"><label>Receipt (PDF/JPG/PNG)</label><input type="file" name="receipt" accept=".pdf,.png,.jpg,.jpeg"></div>
+        <div class="row right mt16"><button>Save Expense</button></div>
+      </form>
+      <div class="mut mt8">We compute input VAT from the gross based on your selected rate, and include it in your quarterly VAT summary.</div>
     </div>
+  </div>
 
-    <div class="grid cols-2 mt24">
-      <!-- Record Expense -->
-      <div class="card">
-        <div class="h2">Add Expense</div>
-        <form method="post" enctype="multipart/form-data" action="{{ url_for('add_expense') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <div class="grid cols-3">
-            <div>
-              <label>Date</label>
-              <input type="date" name="date" required>
-            </div>
-            <div>
-              <label>Amount</label>
-              <input type="number" step="0.01" name="amount" required>
-            </div>
-            <div>
-              <label>Currency</label>
-              <select name="currency">
-                <option value="EUR" selected>EUR</option>
-              </select>
-            </div>
-          </div>
-          <div class="grid cols-3 mt8">
-            <div>
-              <label>Vendor</label>
-              <input name="vendor" placeholder="Supplier name" required>
-            </div>
-            <div>
-              <label>Category</label>
-              <input name="category" list="cats" placeholder="e.g., Software" required>
-              <datalist id="cats">
-                <option>Software</option><option>DGA Salary</option><option>Tax - Wage</option>
-                <option>Tax - CIT</option><option>Travel</option><option>Office</option>
-              </datalist>
-            </div>
-            <div>
-              <label>Receipt (PDF/JPG/PNG)</label>
-              <input type="file" name="receipt" accept=".pdf,.png,.jpg,.jpeg">
-            </div>
-          </div>
-          <div class="mt8">
-            <label>Description</label>
-            <input name="description" placeholder="Optional notes">
-          </div>
-          <div class="row right mt16"><button>Save Expense</button></div>
-        </form>
-      </div>
-
-      <!-- Unpaid invoices quick-pay -->
-      <div class="card">
-        <div class="h2">Unpaid Invoices</div>
-        {% if unpaid_invoices|length == 0 %}
-          <div class="mut">No unpaid invoices.</div>
-        {% else %}
-          <table>
-            <thead>
-              <tr><th>Invoice</th><th>Client</th><th>Due</th><th>Balance</th><th>Pay</th></tr>
-            </thead>
-            <tbody>
-            {% for inv in unpaid_invoices %}
-              <tr>
-                <td>{{ inv.invoice_no }}</td>
-                <td>{{ inv.client_name }}</td>
-                <td>{{ inv.due_date }}</td>
-                <td>€ {{ '%.2f'|format(inv.balance) }}</td>
-                <td>
-                  <form method="post" action="{{ url_for('pay_invoice', invoice_id=inv.id) }}" class="flex">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="date" name="date" required style="width:140px">
-                    <input type="number" step="0.01" name="amount" value="{{ '%.2f'|format(inv.balance) }}" style="width:120px">
-                    <select name="method" style="width:150px">
-                      <option value="bank">Bank</option>
-                      <option value="western_union">Western Union</option>
-                      <option value="cash">Cash</option>
-                      <option value="other">Other</option>
-                    </select>
-                    <input name="reference" placeholder="Ref" style="width:120px">
-                    <button>Record</button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-            </tbody>
-          </table>
-        {% endif %}
-      </div>
-    </div>
-
-    <div class="grid cols-2 mt24">
-      <div class="card">
-        <div class="h2">Recent Payments</div>
-        <table>
-          <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead>
-          <tbody>
+  <!-- Recent -->
+  <div class="grid col-2 section">
+    <div class="card">
+      <div class="h2">Recent Payments</div>
+      <table>
+        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead>
+        <tbody>
           {% for p in recent_payments %}
-            <tr>
-              <td>{{ p.date }}</td>
-              <td>€ {{ '%.2f'|format(p.amount) }}</td>
-              <td>{{ p.method }}</td>
-              <td>{{ p.reference or '' }}</td>
-            </tr>
+            <tr><td>{{ p.date }}</td><td>€ {{ '%.2f'|format(p.amount) }}</td><td>{{ p.method }}</td><td>{{ p.reference or '' }}</td></tr>
           {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      <div class="card">
-        <div class="h2">Recent Expenses</div>
-        <table>
-          <thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th>Amount</th><th>Receipt</th></tr></thead>
-          <tbody>
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="h2">Recent Expenses</div>
+      <table>
+        <thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th>Gross</th><th>VAT</th><th>Receipt</th></tr></thead>
+        <tbody>
           {% for e in recent_expenses %}
             <tr>
-              <td>{{ e.date }}</td>
-              <td>{{ e.vendor }}</td>
-              <td>{{ e.category }}</td>
-              <td>€ {{ '%.2f'|format(e.amount) }}</td>
-              <td>
-                {% if e.receipt_path %}
-                  <a href="{{ url_for('uploaded_file', filename=e.receipt_path) }}">View</a>
-                {% else %}
-                  <span class="mut">—</span>
-                {% endif %}
-              </td>
+              <td>{{ e.date }}</td><td>{{ e.vendor }}</td><td>{{ e.category }}</td>
+              <td>€ {{ '%.2f'|format(e.amount_gross) }}</td>
+              <td>€ {{ '%.2f'|format(e.vat_amount) }}</td>
+              <td>{% if e.receipt_path %}<a href="{{ url_for('uploaded_file', filename=e.receipt_path) }}">View</a>{% else %}<span class="mut">—</span>{% endif %}</td>
             </tr>
           {% endfor %}
-          </tbody>
-        </table>
-      </div>
+        </tbody>
+      </table>
     </div>
-
-    <div class="card mt24">
-      <div class="mut">
-        Tip: if you receive customer money via Western Union and then deposit to your BV bank, record it as Income (method “Western Union”), then link to an invoice payment later if needed.
-      </div>
-    </div>
-
   </div>
+
+</div>
+
+<script>
+  const vatScheme = document.getElementById('vat_scheme');
+  function syncVatOptions() {
+    const rc = vatScheme.value === 'REVERSE_CHARGE_EU';
+    const zero = vatScheme.value === 'ZERO_OUTSIDE_EU' || vatScheme.value === 'EXEMPT';
+    document.querySelectorAll('.line-vat').forEach(sel => {
+      if (rc || zero) { sel.value = '0'; sel.disabled = true; }
+      else { sel.disabled = false; }
+    });
+  }
+  vatScheme.addEventListener('change', syncVatOptions);
+  syncVatOptions();
+
+  function addLine() {
+    const row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML = `
+      <input name="line_desc" placeholder="Description" required>
+      <input name="line_qty" type="number" step="0.01" placeholder="Qty" value="1" required>
+      <input name="line_price" type="number" step="0.01" placeholder="Unit price" required>
+      <select name="line_vat" class="line-vat">
+        <option value="21">21%</option>
+        <option value="9">9%</option>
+        <option value="0" selected>0%</option>
+      </select>
+      <button type="button" onclick="removeLine(this)">✕</button>
+    `;
+    document.getElementById('lines').appendChild(row);
+    syncVatOptions();
+  }
+  function removeLine(btn) {
+    const parent = btn.closest('.line-row');
+    if (parent && document.querySelectorAll('#lines .line-row').length > 1) {
+      parent.remove();
+    }
+  }
+</script>
 </body>
 </html>
