@@ -28,7 +28,7 @@
 <div class="container">
 
   <div class="h1">BV Management Dashboard (Dutch rules)</div>
-  <div class="mut">Keep invoices sequential, include supplier & customer details, track VAT on sales/expenses, and get a quarterly VAT summary.</div>
+  <div class="mut">Pre‑filled with your company details to avoid blanks. Replace the placeholder VAT number when you have the final value.</div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
@@ -52,11 +52,11 @@
       <div class="mt8">Output VAT: € {{ '%.2f'|format(vat_out) }}</div>
       <div>Input VAT: € {{ '%.2f'|format(vat_in) }}</div>
       <div class="h2 mt8">Net VAT due: € {{ '%.2f'|format(vat_due) }}</div>
-      <div class="mut mt8">Note: Reverse‑charge sales (BTW verlegd) show as net without VAT here.</div>
+      <div class="mut mt8">Reverse‑charge (BTW verlegd) shows as net without VAT here.</div>
     </div>
   </div>
 
-  <!-- Company Settings -->
+  <!-- Company Settings (pre-filled with your details) -->
   <div class="card section">
     <div class="h2">Company Settings (required on Dutch invoices)</div>
     <form method="post" action="{{ url_for('save_settings') }}">
@@ -73,41 +73,49 @@
       </div>
       <div class="grid col-2 mt8">
         <div>
-          <label>VAT number (BTW-nummer)</label>
-          <input name="vat_number" value="{{ company.vat_number }}" placeholder="e.g., NL123456789B01">
+          <label>RSIN</label>
+          <input name="rsin" value="{{ company.rsin }}" required>
         </div>
+        <div>
+          <label>VAT number (BTW-nummer)</label>
+          <input name="vat_number" value="{{ company.vat_number }}" required>
+        </div>
+      </div>
+      <div class="grid col-2 mt8">
         <div>
           <label>Invoice prefix</label>
-          <input name="invoice_prefix" value="{{ company.invoice_prefix or 'INV' }}">
+          <input name="invoice_prefix" value="{{ company.invoice_prefix or 'INV' }}" required>
+        </div>
+        <div>
+          <label>IBAN | BIC</label>
+          <div class="row">
+            <input name="iban" value="{{ company.iban }}" required style="flex:2">
+            <input name="bic" value="{{ company.bic }}" required style="flex:1">
+          </div>
         </div>
       </div>
       <div class="grid col-2 mt8">
         <div>
-          <label>IBAN</label>
-          <input name="iban" value="{{ company.iban }}">
-        </div>
-        <div>
-          <label>BIC</label>
-          <input name="bic" value="{{ company.bic }}">
-        </div>
-      </div>
-      <div class="grid col-2 mt8">
-        <div>
-          <label>Address</label>
-          <textarea name="address" rows="2" placeholder="Street, number">{{ company.address }}</textarea>
+          <label>Address (street)</label>
+          <input name="address" value="{{ company.address }}" required>
         </div>
         <div>
           <label>Postcode, City, Country</label>
           <div class="row">
-            <input name="postcode" placeholder="Postcode" value="{{ company.postcode }}" style="flex:1">
-            <input name="city" placeholder="City" value="{{ company.city }}" style="flex:1">
-            <input name="country" placeholder="Country" value="{{ company.country }}" style="flex:1">
+            <input name="postcode" placeholder="Postcode" value="{{ company.postcode }}" required style="flex:1">
+            <input name="city" placeholder="City" value="{{ company.city }}" required style="flex:1">
+            <input name="country" placeholder="Country" value="{{ company.country }}" required style="flex:1">
           </div>
         </div>
       </div>
       <div class="row right mt16"><button>Save</button></div>
     </form>
-    <div class="mut mt8">Tip: Include KVK and VAT number on every invoice; keep records 7+ years.</div>
+    <div class="mut mt8">
+      Registered name: <strong>Climate Resilience Fundraising Platform B.V.</strong><br/>
+      Address: Fluwelen Burgwal, 2511CJ Den Haag, Netherlands<br/>
+      KVK: 94437289 &nbsp;|&nbsp; RSIN: 866777398 &nbsp;|&nbsp; VAT: {{ company.vat_number }}<br/>
+      IBAN: {{ company.iban }} &nbsp;|&nbsp; BIC: {{ company.bic }}
+    </div>
   </div>
 
   <!-- Create Invoice -->
@@ -145,7 +153,7 @@
         </div>
         <div>
           <label>Customer VAT (if reverse charge)</label>
-          <input name="client_vat_number" placeholder="EU VAT number of customer (if BTW verlegd)">
+          <input name="client_vat_number" placeholder="EU VAT number (if BTW verlegd)">
         </div>
       </div>
       <div class="mt8">
@@ -194,7 +202,7 @@
       </div>
     </form>
     <div class="mut mt8">
-      Rules: Include supplier & customer details, invoice & supply dates, unique number (auto), description & quantities, applicable VAT rate/amount. Use “Reverse charge” for EU B2B when VAT shifts to customer; use 0% for exports outside EU.
+      Your invoice number, supplier details (KVK/RSIN/VAT), IBAN/BIC, issue & supply dates, line VAT and customer address are all enforced here to avoid blanks.
     </div>
   </div>
 
@@ -236,7 +244,7 @@
     {% endif %}
   </div>
 
-  <!-- Record standalone income -->
+  <!-- Record standalone income & expenses -->
   <div class="grid col-2 section">
     <div class="card">
       <div class="h2">Record Income (No Invoice)</div>
@@ -256,14 +264,13 @@
               <option value="other">Other</option>
             </select>
           </div>
-          <div><label>Reference</label><input name="reference" placeholder="Bank/WO ref"></div>
+          <div><label>Reference</label><input name="reference" placeholder="Bank/WU ref"></div>
         </div>
         <div class="mt8"><label>Note</label><input name="note" placeholder="Optional"></div>
         <div class="row right mt16"><button>Save Income</button></div>
       </form>
     </div>
 
-    <!-- Record expense with VAT -->
     <div class="card">
       <div class="h2">Add Expense (with VAT)</div>
       <form method="post" enctype="multipart/form-data" action="{{ url_for('add_expense') }}">
@@ -295,38 +302,7 @@
         <div class="mt8"><label>Receipt (PDF/JPG/PNG)</label><input type="file" name="receipt" accept=".pdf,.png,.jpg,.jpeg"></div>
         <div class="row right mt16"><button>Save Expense</button></div>
       </form>
-      <div class="mut mt8">We compute input VAT from the gross based on your selected rate, and include it in your quarterly VAT summary.</div>
-    </div>
-  </div>
-
-  <!-- Recent -->
-  <div class="grid col-2 section">
-    <div class="card">
-      <div class="h2">Recent Payments</div>
-      <table>
-        <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th></tr></thead>
-        <tbody>
-          {% for p in recent_payments %}
-            <tr><td>{{ p.date }}</td><td>€ {{ '%.2f'|format(p.amount) }}</td><td>{{ p.method }}</td><td>{{ p.reference or '' }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    <div class="card">
-      <div class="h2">Recent Expenses</div>
-      <table>
-        <thead><tr><th>Date</th><th>Vendor</th><th>Category</th><th>Gross</th><th>VAT</th><th>Receipt</th></tr></thead>
-        <tbody>
-          {% for e in recent_expenses %}
-            <tr>
-              <td>{{ e.date }}</td><td>{{ e.vendor }}</td><td>{{ e.category }}</td>
-              <td>€ {{ '%.2f'|format(e.amount_gross) }}</td>
-              <td>€ {{ '%.2f'|format(e.vat_amount) }}</td>
-              <td>{% if e.receipt_path %}<a href="{{ url_for('uploaded_file', filename=e.receipt_path) }}">View</a>{% else %}<span class="mut">—</span>{% endif %}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <div class="mut mt8">We compute input VAT from the gross based on your selected rate and include it in your quarterly VAT summary.</div>
     </div>
   </div>
 
@@ -335,6 +311,7 @@
 <script>
   const vatScheme = document.getElementById('vat_scheme');
   function syncVatOptions() {
+    if (!vatScheme) return;
     const rc = vatScheme.value === 'REVERSE_CHARGE_EU';
     const zero = vatScheme.value === 'ZERO_OUTSIDE_EU' || vatScheme.value === 'EXEMPT';
     document.querySelectorAll('.line-vat').forEach(sel => {
@@ -342,8 +319,10 @@
       else { sel.disabled = false; }
     });
   }
-  vatScheme.addEventListener('change', syncVatOptions);
-  syncVatOptions();
+  if (vatScheme) {
+    vatScheme.addEventListener('change', syncVatOptions);
+    syncVatOptions();
+  }
 
   function addLine() {
     const row = document.createElement('div');
