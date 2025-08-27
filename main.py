@@ -12,7 +12,7 @@ from werkzeug.utils import secure_filename
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Date, Numeric, ForeignKey,
-    Text, func, select, UniqueConstraint
+    Text, func, select, UniqueConstraint, inspect, text
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
 
@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 # -------------------------------------------------
 # Config & helpers
 # -------------------------------------------------
-load_dotenv()  # loads local .env (safe in prod)
+load_dotenv()  # loads local .env for DATABASE_URL, SECRET_KEY, etc.
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -38,6 +38,24 @@ SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocom
 Base = declarative_base()
 
 # -------------------------------------------------
+# DEFAULT COMPANY INFO (your data)
+# -------------------------------------------------
+DEFAULT_COMPANY = {
+    "company_name": "Climate Resilience Fundraising Platform B.V.",
+    "address": "Fluwelen Burgwal",
+    "postcode": "2511CJ",
+    "city": "Den Haag",
+    "country": "Netherlands",
+    "kvk": "94437289",
+    "rsin": "866777398",
+    # Use your real VAT number when available; placeholder warns in UI
+    "vat_number": "NL[xxxx.xxx].B01",
+    "iban": "NL06 REVO 7487 2866 30",
+    "bic": "REVONL22",
+    "invoice_prefix": "INV"
+}
+
+# -------------------------------------------------
 # Models
 # -------------------------------------------------
 class CompanySettings(Base):
@@ -46,6 +64,7 @@ class CompanySettings(Base):
     company_name = Column(String(160), nullable=False, default="")
     address = Column(Text, default="")
     kvk = Column(String(32), default="")
+    rsin = Column(String(32), default="")
     vat_number = Column(String(32), default="")
     iban = Column(String(64), default="")
     bic = Column(String(32), default="")
@@ -145,7 +164,18 @@ class Expense(Base):
 
     receipt_path = Column(String(256))
 
+# Create tables (no destructive changes)
 Base.metadata.create_all(engine)
+
+# One-time schema upgrade for rsin (for existing DBs)
+def ensure_schema_upgrades():
+    insp = inspect(engine)
+    if insp.has_table("company_settings"):
+        cols = {c['name'] for c in insp.get_columns("company_settings")}
+        if "rsin" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE company_settings ADD COLUMN rsin VARCHAR(32) DEFAULT ''"))
+ensure_schema_upgrades()
 
 # -------------------------------------------------
 # Utilities
@@ -173,8 +203,14 @@ def remove_session(_exc=None):
 def ensure_company(db):
     row = db.get(CompanySettings, 1)
     if not row:
-        row = CompanySettings(id=1, company_name="", invoice_prefix="INV")
-        db.add(row); db.commit()
+        row = CompanySettings(id=1)
+        db.add(row)
+        db.flush()
+    # Autofill missing fields with your defaults
+    for key, val in DEFAULT_COMPANY.items():
+        if not getattr(row, key, None):
+            setattr(row, key, val)
+    db.commit()
     return row
 
 def next_invoice_no(db, prefix: str) -> str:
@@ -202,11 +238,10 @@ def recalc_invoice(inv: Invoice):
         line.line_net = ln; line.line_vat = lv; line.line_total = lt
         net += ln; vat += lv; gross += lt
 
-    # If REVERSE_CHARGE_EU -> VAT should be 0 on the invoice (output VAT not charged),
-    # but we still track net for VAT reporting; same for ZERO_OUTSIDE_EU and EXEMPT.
+    # VAT header schemes that zero out VAT on invoice
     if inv.vat_scheme in ("REVERSE_CHARGE_EU", "ZERO_OUTSIDE_EU", "EXEMPT"):
         vat = Decimal("0.00")
-        gross = net  # no VAT charged
+        gross = net
 
     inv.net_total = net.quantize(Decimal("0.01"))
     inv.vat_total = vat.quantize(Decimal("0.01"))
@@ -230,18 +265,24 @@ def quarter_bounds(d: date):
 def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
     """Return list of warnings for Dutch invoice rules."""
     warns = []
-    # Required supplier details
-    if not company.company_name or not company.address:
-        warns.append("Company name/address missing in Company Settings.")
+    # Supplier details
+    if not company.company_name or not company.address or not company.city or not company.postcode:
+        warns.append("Company name/address/postcode/city missing in Company Settings.")
     if not company.kvk:
         warns.append("KVK number missing in Company Settings.")
-    # VAT number recommended/required on invoice (supplier)
-    if inv.vat_scheme != "EXEMPT" and not company.vat_number:
-        warns.append("Supplier VAT number missing in Company Settings.")
+    if not company.rsin:
+        warns.append("RSIN missing in Company Settings.")
+    if inv.vat_scheme != "EXEMPT":
+        if not company.vat_number:
+            warns.append("Supplier VAT number missing in Company Settings.")
+        elif "[" in (company.vat_number or ""):
+            warns.append("Supplier VAT number looks like a placeholder. Replace with your real VAT number.")
+    if not company.iban or not company.bic:
+        warns.append("IBAN/BIC missing in Company Settings.")
 
-    # Required customer details
+    # Customer details
     if not inv.client_name or not inv.client_address:
-        warns.append("Customer name and address required on invoice.")
+        warns.append("Customer name and address required on the invoice.")
     if inv.vat_scheme == "REVERSE_CHARGE_EU" and not inv.client_vat_number:
         warns.append("Customer VAT number required for reverse charge (BTW verlegd).")
 
@@ -263,7 +304,7 @@ def index():
     today = date.today()
     q_start, q_end = quarter_bounds(today)
 
-    # Income/Expense summary YTD
+    # YTD
     ytd_income = db.execute(
         select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year, 1, 1))
     ).scalar_one()
@@ -271,11 +312,9 @@ def index():
         select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year, 1, 1))
     ).scalar_one()
 
-    # VAT summary this quarter
-    # Output VAT: sum of invoice line VAT except where scheme zero/exempt/reverse (0 VAT charged)
+    # VAT (quarter)
     sales_21 = sales_9 = sales_0 = Decimal("0.00")
     vat_out = Decimal("0.00")
-    # Iterate lines within quarter by invoice.issue_date
     ilines = db.execute(
         select(InvoiceLine, Invoice).join(Invoice).where(
             Invoice.issue_date >= q_start, Invoice.issue_date <= q_end
@@ -284,29 +323,19 @@ def index():
     for line, inv in ilines:
         net = dec(line.line_net)
         if inv.vat_scheme == "REVERSE_CHARGE_EU":
-            # Reverse charge: no VAT charged; track separately if desired
+            # Shown without VAT here (customer accounts for VAT)
             pass
         elif inv.vat_scheme in ("ZERO_OUTSIDE_EU", "EXEMPT"):
             sales_0 += net
         else:
-            # Standard rates
             rate = dec(line.vat_rate)
-            if rate == dec("21"):
-                sales_21 += net
-            elif rate == dec("9"):
-                sales_9 += net
-            else:
-                sales_0 += net  # 0%
+            if rate == dec("21"): sales_21 += net
+            elif rate == dec("9"): sales_9 += net
+            else: sales_0 += net
             vat_out += dec(line.line_vat)
 
-    # Input VAT from expenses within quarter
-    exp_rows = db.execute(
-        select(Expense).where(Expense.date >= q_start, Expense.date <= q_end)
-    ).scalars().all()
-    vat_in = Decimal("0.00")
-    for e in exp_rows:
-        vat_in += dec(e.vat_amount)
-
+    exp_rows = db.execute(select(Expense).where(Expense.date >= q_start, Expense.date <= q_end)).scalars().all()
+    vat_in = sum((dec(e.vat_amount) for e in exp_rows), Decimal("0.00"))
     vat_due = (vat_out - vat_in).quantize(Decimal("0.01"))
 
     # Lists
@@ -347,6 +376,7 @@ def save_settings():
         company.postcode = request.form.get("postcode","").strip()
         company.country = request.form.get("country","Netherlands").strip()
         company.kvk = request.form.get("kvk","").strip()
+        company.rsin = request.form.get("rsin","").strip()
         company.vat_number = request.form.get("vat_number","").strip()
         company.iban = request.form.get("iban","").strip()
         company.bic = request.form.get("bic","").strip()
@@ -384,7 +414,7 @@ def create_invoice():
         )
         db.add(inv); db.flush()
 
-        # Lines (arrays)
+        # Lines
         descs = request.form.getlist("line_desc")
         qtys = request.form.getlist("line_qty")
         prices = request.form.getlist("line_price")
@@ -399,14 +429,12 @@ def create_invoice():
             line = InvoiceLine(invoice_id=inv.id, description=d, qty=q, unit_price=up, vat_rate=vr)
             db.add(line)
         db.flush()
-        recalc_invoice(inv)
-        update_status(inv)
+        recalc_invoice(inv); update_status(inv)
 
         # Compliance warnings
-        warns = compliance_warnings(company, inv)
-        if warns:
-            for w in warns:
-                flash("Invoice warning: " + w, "warning")
+        for w in compliance_warnings(company, inv):
+            flash("Invoice warning: " + w, "warning")
+
         db.commit()
         flash(f"Invoice {inv.invoice_no} created.", "success")
     except Exception as e:
@@ -467,7 +495,7 @@ def add_expense():
         amount_gross = dec(request.form["amount_gross"])
         vat_rate = dec(request.form.get("vat_rate","21"))
 
-        # Compute net and VAT (if exempt, vat_rate=0)
+        # Compute net and VAT
         if vat_rate <= Decimal("0"):
             amount_net = amount_gross
             vat_amount = Decimal("0.00")
