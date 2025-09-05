@@ -4,6 +4,10 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 
+try:
+    import yaml
+except ImportError:  # pragma: no cover - optional dependency
+    yaml = None
 from flask import (
     Flask, render_template, jsonify, abort,
     request, redirect, url_for
@@ -22,6 +26,33 @@ DB_NAME = os.getenv("DB_NAME")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@aiforimpact.local")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # optional simple protection; leave unset to disable
 
+
+def load_env_from_app_yaml() -> None:
+    """Populate missing env vars from app.yaml for local dev."""
+    global INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME, ADMIN_EMAIL, ADMIN_TOKEN
+    if all([INSTANCE_CONNECTION_NAME, DB_USER, DB_PASS, DB_NAME]):
+        return
+    if yaml is None:
+        print("Warning: PyYAML not installed; skipping app.yaml loading")
+        return
+    try:
+        with open("app.yaml", "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        envs = data.get("env_variables", {})
+        INSTANCE_CONNECTION_NAME = INSTANCE_CONNECTION_NAME or envs.get("INSTANCE_CONNECTION_NAME")
+        DB_USER = DB_USER or envs.get("DB_USER")
+        DB_PASS = DB_PASS or envs.get("DB_PASS")
+        DB_NAME = DB_NAME or envs.get("DB_NAME")
+        ADMIN_EMAIL = ADMIN_EMAIL or envs.get("ADMIN_EMAIL", "admin@aiforimpact.local")
+        ADMIN_TOKEN = ADMIN_TOKEN or envs.get("ADMIN_TOKEN")
+    except FileNotFoundError:
+        # app.yaml absent: ignore silently for compatibility
+        pass
+    except Exception as e:  # pragma: no cover
+        print(f"Warning: failed to load env vars from app.yaml: {e}")
+
+
+load_env_from_app_yaml()
 DB_HOST = f"/cloudsql/{INSTANCE_CONNECTION_NAME}" if INSTANCE_CONNECTION_NAME else None
 
 # ---- Connection Pool (lazy) ----
@@ -123,27 +154,53 @@ def healthz():
 
 @app.get("/")
 def index():
-    rows = fetch_all("""
-        SELECT id, title, is_published, published_at, created_at
-        FROM courses
-        ORDER BY COALESCE(published_at, created_at) DESC
-        LIMIT 100;
-    """)
-    for r in rows:
-        for k in ("created_at", "published_at"):
-            if r.get(k) and isinstance(r[k], datetime):
-                r[k] = r[k].strftime("%Y-%m-%d %H:%M")
-    return render_template("index.html", courses=rows)
+    """Home page listing courses.
+
+    When running locally without a database configured, the query would
+    normally raise an exception which resulted in a 404/500 response.
+    Instead, swallow the error and render the page with an empty list so the
+    app can still be reached for basic smoke tests.
+    """
+    rows: list[dict] = []
+    err = None
+    if not all([DB_HOST, DB_NAME, DB_USER, DB_PASS]):
+        err = "Database env vars are missing. Check app.yaml env_variables."
+    else:
+        try:
+            rows = fetch_all(
+                """
+                SELECT id, title, is_published, published_at, created_at
+                FROM courses
+                ORDER BY COALESCE(published_at, created_at) DESC
+                LIMIT 100;
+                """
+            )
+            for r in rows:
+                for k in ("created_at", "published_at"):
+                    if r.get(k) and isinstance(r[k], datetime):
+                        r[k] = r[k].strftime("%Y-%m-%d %H:%M")
+        except Exception as e:  # pragma: no cover - best effort for local dev
+            err = str(e)
+            print(f"Warning: failed to load courses: {e}")
+    return render_template("index.html", courses=rows, err=err)
 
 @app.get("/api/courses")
 def api_courses():
-    rows = fetch_all("""
-        SELECT id, title, is_published, published_at, created_at
-        FROM courses
-        ORDER BY COALESCE(published_at, created_at) DESC
-        LIMIT 100;
-    """)
-    return jsonify(rows)
+    if not all([DB_HOST, DB_NAME, DB_USER, DB_PASS]):
+        return jsonify({"error": "Database env vars are missing. Check app.yaml env_variables."}), 500
+    try:
+        rows = fetch_all(
+            """
+            SELECT id, title, is_published, published_at, created_at
+            FROM courses
+            ORDER BY COALESCE(published_at, created_at) DESC
+            LIMIT 100;
+            """
+        )
+        return jsonify(rows)
+    except Exception as e:  # pragma: no cover - best effort for local dev
+        print(f"Warning: failed to load courses API: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/course/<int:course_id>")
 def course_detail(course_id: int):
@@ -169,15 +226,21 @@ def course_detail(course_id: int):
 @app.get("/admin")
 def admin_home():
     require_admin()
-    # list latest courses
-    courses = fetch_all("""
+    msg = request.args.get("msg")
+    err = request.args.get("err")
+    courses: list[dict] = []
+    try:
+        courses = fetch_all(
+            """
         SELECT id, title, is_published, published_at, created_at
         FROM courses
         ORDER BY id DESC
         LIMIT 200;
-    """)
-    msg = request.args.get("msg")
-    err = request.args.get("err")
+        """
+        )
+    except Exception as e:  # pragma: no cover - best effort for local dev
+        err = err or f"Failed to load courses: {e}"
+        print(f"Warning: failed to load courses for admin: {e}")
     return render_template("admin.html", courses=courses, msg=msg, err=err)
 
 @app.post("/admin/course/create")

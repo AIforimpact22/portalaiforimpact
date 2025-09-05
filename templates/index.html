@@ -32,6 +32,10 @@
   </header>
 
   <main>
+    {% if err %}
+      <p class="muted">Error loading courses: {{ err }}</p>
+    {% endif %}
+
     {% if courses|length == 0 %}
       <p class="muted">No courses yet. Add one to your <code>courses</code> table (try the <a href="/admin">Admin</a> page).</p>
     {% else %}
