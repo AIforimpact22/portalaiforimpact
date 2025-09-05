@@ -1,617 +1,324 @@
 import os
-import secrets
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+import json
+import uuid
+from contextlib import contextmanager
+from datetime import datetime
 
 from flask import (
-    Flask, render_template, request, redirect, url_for,
-    flash, send_from_directory, session
+    Flask, render_template, jsonify, abort,
+    request, redirect, url_for
 )
-from werkzeug.utils import secure_filename
+import psycopg2
+from psycopg2 import pool
+from psycopg2.extras import RealDictCursor
 
-from sqlalchemy import (
-    create_engine, Column, Integer, String, Date, Numeric, ForeignKey,
-    Text, func, select, UniqueConstraint, inspect, text
-)
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker, scoped_session
+app = Flask(__name__)
 
-from dateutil.relativedelta import relativedelta
-from dotenv import load_dotenv
+# ---- Config from env (set in app.yaml) ----
+INSTANCE_CONNECTION_NAME = os.getenv("INSTANCE_CONNECTION_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_NAME = os.getenv("DB_NAME")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@aiforimpact.local")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # optional simple protection; leave unset to disable
 
-# -------------------------------------------------
-# Config
-# -------------------------------------------------
-load_dotenv()
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+DB_HOST = f"/cloudsql/{INSTANCE_CONNECTION_NAME}" if INSTANCE_CONNECTION_NAME else None
 
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-" + secrets.token_hex(16))
+# ---- Connection Pool (lazy) ----
+_pg_pool: pool.SimpleConnectionPool | None = None
 
-app = Flask(__name__, template_folder="templates", static_folder=None)
-app.config.update(SECRET_KEY=SECRET_KEY, UPLOAD_FOLDER=UPLOAD_FOLDER, MAX_CONTENT_LENGTH=25 * 1024 * 1024)
+def init_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        if not all([DB_HOST, DB_NAME, DB_USER, DB_PASS]):
+            raise RuntimeError("Database env vars are missing. Check app.yaml env_variables.")
+        _pg_pool = psycopg2.pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=5,
+            host=DB_HOST,
+            dbname=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS,
+            cursor_factory=RealDictCursor,
+            connect_timeout=10,
+            options="-c search_path=public"
+        )
 
-engine = create_engine(DATABASE_URL, future=True, pool_pre_ping=True)
-SessionLocal = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True))
-Base = declarative_base()
+@contextmanager
+def get_conn():
+    """Borrow/return a connection from the pool (lazy-init on first use)."""
+    if _pg_pool is None:
+        init_pool()
+    conn = _pg_pool.getconn()
+    try:
+        yield conn
+    finally:
+        _pg_pool.putconn(conn)
 
-# -------------------------------------------------
-# Your company defaults (no blanks)
-# -------------------------------------------------
-DEFAULT_COMPANY = {
-    "company_name": "Climate Resilience Fundraising Platform B.V.",
-    "address": "Fluwelen Burgwal",
-    "postcode": "2511CJ",
-    "city": "Den Haag",
-    "country": "Netherlands",
-    "kvk": "94437289",
-    "rsin": "866777398",
-    "vat_number": "NL[xxxx.xxx].B01",  # replace with your real VAT when available
-    "iban": "NL06 REVO 7487 2866 30",
-    "bic": "REVONL22",
-    "invoice_prefix": "INV",
-}
+# ---- DB helpers ----
+def fetch_all(q, params=None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(q, params or ())
+            return cur.fetchall()
 
-# -------------------------------------------------
-# Models
-# -------------------------------------------------
-class CompanySettings(Base):
-    __tablename__ = "company_settings"
-    id = Column(Integer, primary_key=True)
-    company_name = Column(String(160), nullable=False, default="")
-    address = Column(Text, default="")
-    kvk = Column(String(32), default="")
-    rsin = Column(String(32), default="")
-    vat_number = Column(String(32), default="")
-    iban = Column(String(64), default="")
-    bic = Column(String(32), default="")
-    invoice_prefix = Column(String(16), default="INV")
-    city = Column(String(80), default="")
-    postcode = Column(String(24), default="")
-    country = Column(String(80), default="Netherlands")
+def fetch_one(q, params=None):
+    rows = fetch_all(q, params)
+    return rows[0] if rows else None
 
-class InvoiceSequence(Base):
-    __tablename__ = "invoice_sequences"
-    id = Column(Integer, primary_key=True)
-    year = Column(Integer, nullable=False)
-    prefix = Column(String(16), nullable=False, default="INV")
-    last_seq = Column(Integer, nullable=False, default=0)
-    __table_args__ = (UniqueConstraint('year', 'prefix', name='uq_year_prefix'),)
+def execute(q, params=None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(q, params or ())
+        conn.commit()
 
-class Invoice(Base):
-    __tablename__ = "invoices"
-    id = Column(Integer, primary_key=True)
-    invoice_no = Column(String(64), unique=True, nullable=False)
-    issue_date = Column(Date, nullable=False, default=date.today)
-    supply_date = Column(Date, nullable=False, default=date.today)  # performance date
-    due_date = Column(Date, nullable=False)
-    currency = Column(String(8), nullable=False, default="EUR")
+def execute_returning(q, params=None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(q, params or ())
+            rows = cur.fetchall()
+        conn.commit()
+        return rows
 
-    client_name = Column(String(160), nullable=False)
-    client_address = Column(Text, default="")
-    client_vat_number = Column(String(40), default="")  # needed for reverse charge
+# ---- Utility ----
+def get_or_create_admin_user_id() -> int:
+    """
+    Ensure there's an admin user to satisfy courses.created_by FK.
+    """
+    row = fetch_one("SELECT id FROM users WHERE email = %s;", (ADMIN_EMAIL,))
+    if row:
+        return row["id"]
+    # Create admin user
+    rows = execute_returning("""
+        INSERT INTO users (email, full_name, role)
+        VALUES (%s, %s, 'admin')
+        ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
+        RETURNING id;
+    """, (ADMIN_EMAIL, "Portal Admin"))
+    return rows[0]["id"]
 
-    # STANDARD / REVERSE_CHARGE_EU / ZERO_OUTSIDE_EU / EXEMPT
-    vat_scheme = Column(String(32), nullable=False, default="STANDARD")
+def require_admin():
+    """
+    Optional very simple guard using a token. If ADMIN_TOKEN is set,
+    require ?token=<ADMIN_TOKEN> query param on admin routes.
+    """
+    if ADMIN_TOKEN and request.args.get("token") != ADMIN_TOKEN:
+        abort(403)
 
-    notes = Column(Text, default="")
-    status = Column(String(16), nullable=False, default="SENT")  # DRAFT/SENT/PARTIAL/PAID
+def pretty_json(obj) -> str:
+    try:
+        return json.dumps(obj, indent=2, ensure_ascii=False)
+    except Exception:
+        return str(obj)
 
-    net_total = Column(Numeric(12, 2), nullable=False, default=0)
-    vat_total = Column(Numeric(12, 2), nullable=False, default=0)
-    gross_total = Column(Numeric(12, 2), nullable=False, default=0)
+# ---- Public routes ----
+@app.get("/healthz")
+def healthz():
+    try:
+        row = fetch_one("SELECT 1 AS ok;")
+        ok = bool(row and row.get("ok") == 1)
+        return ("ok" if ok else "db-fail", 200 if ok else 500)
+    except Exception as e:
+        return (f"error: {e}", 500)
 
-    lines = relationship("InvoiceLine", back_populates="invoice", cascade="all, delete-orphan")
-    payments = relationship("Payment", back_populates="invoice", cascade="all, delete-orphan")
+@app.get("/")
+def index():
+    rows = fetch_all("""
+        SELECT id, title, is_published, published_at, created_at
+        FROM courses
+        ORDER BY COALESCE(published_at, created_at) DESC
+        LIMIT 100;
+    """)
+    for r in rows:
+        for k in ("created_at", "published_at"):
+            if r.get(k) and isinstance(r[k], datetime):
+                r[k] = r[k].strftime("%Y-%m-%d %H:%M")
+    return render_template("index.html", courses=rows)
 
-    @property
-    def paid_total(self) -> Decimal:
-        total = Decimal("0.00")
-        for p in self.payments:
-            total += Decimal(p.amount)
-        return total.quantize(Decimal("0.01"))
+@app.get("/api/courses")
+def api_courses():
+    rows = fetch_all("""
+        SELECT id, title, is_published, published_at, created_at
+        FROM courses
+        ORDER BY COALESCE(published_at, created_at) DESC
+        LIMIT 100;
+    """)
+    return jsonify(rows)
 
-    @property
-    def balance(self) -> Decimal:
-        return (Decimal(self.gross_total) - self.paid_total).quantize(Decimal("0.01"))
-
-class InvoiceLine(Base):
-    __tablename__ = "invoice_lines"
-    id = Column(Integer, primary_key=True)
-    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=False)
-    description = Column(Text, nullable=False)
-    qty = Column(Numeric(12, 2), nullable=False, default=1)
-    unit_price = Column(Numeric(12, 2), nullable=False, default=0)
-    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21 / 9 / 0
-
-    line_net = Column(Numeric(12, 2), nullable=False, default=0)
-    line_vat = Column(Numeric(12, 2), nullable=False, default=0)
-    line_total = Column(Numeric(12, 2), nullable=False, default=0)
-
-    invoice = relationship("Invoice", back_populates="lines")
-
-class Payment(Base):
-    __tablename__ = "payments"
-    id = Column(Integer, primary_key=True)
-    invoice_id = Column(Integer, ForeignKey("invoices.id"), nullable=True)  # standalone income allowed
-    date = Column(Date, nullable=False, default=date.today)
-    amount = Column(Numeric(12, 2), nullable=False)
-    method = Column(String(32), nullable=False, default="bank")  # bank, cash, western_union, other
-    reference = Column(String(128))
-    note = Column(Text)
-    invoice = relationship("Invoice", back_populates="payments")
-
-class Expense(Base):
-    __tablename__ = "expenses"
-    id = Column(Integer, primary_key=True)
-    date = Column(Date, nullable=False, default=date.today)
-    vendor = Column(String(160), nullable=False)
-    category = Column(String(64), nullable=False)  # Software, DGA Salary, Tax - Wage, Tax - CIT, Travel, Office...
-    description = Column(Text, default="")
-    currency = Column(String(8), nullable=False, default="EUR")
-    vat_rate = Column(Numeric(5, 2), nullable=False, default=21.00)  # 21/9/0; store 0 for exempt
-    amount_net = Column(Numeric(12, 2), nullable=False, default=0)
-    vat_amount = Column(Numeric(12, 2), nullable=False, default=0)
-    amount_gross = Column(Numeric(12, 2), nullable=False, default=0)
-    receipt_path = Column(String(256))
-
-# Create tables first (adds new ones but won't add columns to existing tables)
-Base.metadata.create_all(engine)
-
-# -------------------------------------------------
-# Automatic schema upgrades (fixes your error)
-# -------------------------------------------------
-def run_schema_upgrades():
-    insp = inspect(engine)
-
-    # company_settings: ensure rsin column exists
-    if insp.has_table("company_settings"):
-        cols = {c['name'] for c in insp.get_columns("company_settings")}
-        if "rsin" not in cols:
-            with engine.begin() as conn:
-                conn.execute(text("ALTER TABLE company_settings ADD COLUMN rsin VARCHAR(32) DEFAULT ''"))
-
-    # expenses: ensure new VAT columns exist, backfill from legacy 'amount'
-    if insp.has_table("expenses"):
-        cols = {c['name'] for c in insp.get_columns("expenses")}
-        statements = []
-        if "amount_gross" not in cols:
-            statements.append("ALTER TABLE expenses ADD COLUMN amount_gross NUMERIC(12,2) DEFAULT 0")
-        if "amount_net" not in cols:
-            statements.append("ALTER TABLE expenses ADD COLUMN amount_net NUMERIC(12,2) DEFAULT 0")
-        if "vat_amount" not in cols:
-            statements.append("ALTER TABLE expenses ADD COLUMN vat_amount NUMERIC(12,2) DEFAULT 0")
-        if "vat_rate" not in cols:
-            statements.append("ALTER TABLE expenses ADD COLUMN vat_rate NUMERIC(5,2) DEFAULT 0")
-        if statements:
-            with engine.begin() as conn:
-                for s in statements:
-                    conn.execute(text(s))
-                # Backfill from legacy 'amount' if present
-                if "amount" in cols:
-                    conn.execute(text("""
-                        UPDATE expenses
-                        SET amount_gross = COALESCE(amount,0),
-                            amount_net   = COALESCE(amount,0),
-                            vat_amount   = 0,
-                            vat_rate     = 0
-                        WHERE COALESCE(amount_gross,0) = 0 AND COALESCE(amount_net,0) = 0
-                    """))
-
-    # invoices: add new columns if missing and backfill from legacy 'amount' and 'issue_date'
-    if insp.has_table("invoices"):
-        cols = {c['name'] for c in insp.get_columns("invoices")}
-        adds = []
-        if "supply_date" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN supply_date DATE")
-        if "vat_scheme" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN vat_scheme VARCHAR(32) DEFAULT 'STANDARD'")
-        if "client_address" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN client_address TEXT")
-        if "client_vat_number" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN client_vat_number VARCHAR(40)")
-        if "notes" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN notes TEXT")
-        if "status" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN status VARCHAR(16) DEFAULT 'SENT'")
-        if "net_total" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN net_total NUMERIC(12,2) DEFAULT 0")
-        if "vat_total" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN vat_total NUMERIC(12,2) DEFAULT 0")
-        if "gross_total" not in cols:
-            adds.append("ALTER TABLE invoices ADD COLUMN gross_total NUMERIC(12,2) DEFAULT 0")
-        if adds:
-            with engine.begin() as conn:
-                for s in adds:
-                    conn.execute(text(s))
-                # Backfill
-                if "supply_date" not in cols and "issue_date" in cols:
-                    conn.execute(text("UPDATE invoices SET supply_date = issue_date WHERE supply_date IS NULL"))
-                # Legacy 'amount' -> gross_total/net_total if present
-                if "amount" in cols:
-                    conn.execute(text("""
-                        UPDATE invoices
-                        SET gross_total = COALESCE(amount,0),
-                            net_total   = COALESCE(amount,0),
-                            vat_total   = 0
-                        WHERE COALESCE(gross_total,0) = 0 AND COALESCE(net_total,0) = 0
-                    """))
-
-    # invoice_lines: ensure computed columns exist (if table already existed from older version)
-    if insp.has_table("invoice_lines"):
-        cols = {c['name'] for c in insp.get_columns("invoice_lines")}
-        with engine.begin() as conn:
-            if "line_net" not in cols:
-                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_net NUMERIC(12,2) DEFAULT 0"))
-            if "line_vat" not in cols:
-                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_vat NUMERIC(12,2) DEFAULT 0"))
-            if "line_total" not in cols:
-                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN line_total NUMERIC(12,2) DEFAULT 0"))
-            if "vat_rate" not in cols:
-                conn.execute(text("ALTER TABLE invoice_lines ADD COLUMN vat_rate NUMERIC(5,2) DEFAULT 0"))
-
-run_schema_upgrades()
-
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
-def dec(x) -> Decimal:
-    return Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-def csrf_token():
-    if "csrf_token" not in session:
-        session["csrf_token"] = secrets.token_hex(16)
-    return session["csrf_token"]
-
-def require_csrf(form_token: str):
-    tok = session.get("csrf_token")
-    if not tok or tok != form_token:
-        raise ValueError("CSRF token mismatch")
-
-def get_db():
-    return SessionLocal()
-
-@app.teardown_appcontext
-def remove_session(_exc=None):
-    SessionLocal.remove()
-
-def ensure_company(db):
-    row = db.get(CompanySettings, 1)
+@app.get("/course/<int:course_id>")
+def course_detail(course_id: int):
+    row = fetch_one("""
+        SELECT id, title, is_published, published_at, created_at, structure
+        FROM courses
+        WHERE id = %s;
+    """, (course_id,))
     if not row:
-        row = CompanySettings(id=1)
-        db.add(row); db.flush()
-    # autofill any missing field
-    for k, v in DEFAULT_COMPANY.items():
-        if not getattr(row, k, None):
-            setattr(row, k, v)
-    db.commit()
-    return row
+        abort(404)
 
-def next_invoice_no(db, prefix: str) -> str:
-    year = date.today().year
-    seq = db.execute(
-        select(InvoiceSequence).where(InvoiceSequence.year == year, InvoiceSequence.prefix == prefix)
-    ).scalar_one_or_none()
-    if not seq:
-        seq = InvoiceSequence(year=year, prefix=prefix, last_seq=0)
-        db.add(seq); db.flush()
-    seq.last_seq += 1
-    db.flush()
-    return f"{prefix}-{year}-{seq.last_seq:04d}"
+    structure = row.get("structure") or {}
+    if isinstance(structure, str):
+        try:
+            structure = json.loads(structure)
+        except Exception:
+            structure = {"sections": []}
 
-def recalc_invoice(inv: Invoice):
-    net = Decimal("0.00"); vat = Decimal("0.00"); gross = Decimal("0.00")
-    for line in inv.lines:
-        ln = dec(line.qty) * dec(line.unit_price)
-        lr = dec(line.vat_rate)
-        lv = (ln * lr / Decimal("100")).quantize(Decimal("0.01"))
-        lt = (ln + lv).quantize(Decimal("0.01"))
-        line.line_net = ln; line.line_vat = lv; line.line_total = lt
-        net += ln; vat += lv; gross += lt
-    if inv.vat_scheme in ("REVERSE_CHARGE_EU", "ZERO_OUTSIDE_EU", "EXEMPT"):
-        vat = Decimal("0.00"); gross = net
-    inv.net_total = net.quantize(Decimal("0.01"))
-    inv.vat_total = vat.quantize(Decimal("0.01"))
-    inv.gross_total = gross.quantize(Decimal("0.01"))
+    sections = structure.get("sections", [])
+    return render_template("course_detail.html", course=row, sections=sections)
 
-def update_status(inv: Invoice):
-    if inv.paid_total <= Decimal("0.00"):
-        inv.status = "SENT"
-    elif inv.paid_total < Decimal(inv.gross_total):
-        inv.status = "PARTIAL"
-    else:
-        inv.status = "PAID"
+# ---- Admin routes ----
+@app.get("/admin")
+def admin_home():
+    require_admin()
+    # list latest courses
+    courses = fetch_all("""
+        SELECT id, title, is_published, published_at, created_at
+        FROM courses
+        ORDER BY id DESC
+        LIMIT 200;
+    """)
+    msg = request.args.get("msg")
+    err = request.args.get("err")
+    return render_template("admin.html", courses=courses, msg=msg, err=err)
 
-def quarter_bounds(d: date):
-    q = (d.month - 1)//3 + 1
-    start_month = 3*(q-1)+1
-    start = date(d.year, start_month, 1)
-    end = (start + relativedelta(months=3)) - relativedelta(days=1)
-    return start, end
+@app.post("/admin/course/create")
+def admin_create_course_quick():
+    require_admin()
+    try:
+        title = (request.form.get("title") or "").strip()
+        is_published = bool(request.form.get("is_published"))
+        description_md = (request.form.get("description_md") or "").strip()
+        section_title = (request.form.get("section_title") or "Section 1").strip()
+        lesson_title = (request.form.get("lesson_title") or "Lesson 1").strip()
+        lesson_kind = request.form.get("lesson_kind") or "video"
 
-def vat_summary(db, year: int, quarter: int):
-    start_month = 3*(quarter-1)+1
-    q_start = date(year, start_month, 1)
-    q_end = (q_start + relativedelta(months=3)) - relativedelta(days=1)
-
-    sales_21 = sales_9 = sales_0 = Decimal("0.00"); vat_out = Decimal("0.00")
-    rows = db.execute(select(InvoiceLine, Invoice).join(Invoice).where(
-        Invoice.issue_date >= q_start, Invoice.issue_date <= q_end
-    )).all()
-    for line, inv in rows:
-        net = dec(line.line_net)
-        if inv.vat_scheme == "REVERSE_CHARGE_EU":
-            pass
-        elif inv.vat_scheme in ("ZERO_OUTSIDE_EU", "EXEMPT"):
-            sales_0 += net
+        # Build minimal structure
+        lesson_uid = str(uuid.uuid4())
+        content = {}
+        if lesson_kind == "video":
+            video_url = (request.form.get("video_url") or "").strip()
+            duration_sec = request.form.get("duration_sec")
+            content = {
+                "provider": "url" if video_url else "upload",
+                "url": video_url,
+                "duration_sec": int(duration_sec) if (duration_sec or "").isdigit() else None,
+                "notes_md": (request.form.get("notes_md") or "").strip()
+            }
+        elif lesson_kind == "article":
+            content = {
+                "body_md": (request.form.get("article_body_md") or "## Article\nWrite here...").strip()
+            }
         else:
-            rate = dec(line.vat_rate)
-            if rate == dec("21"): sales_21 += net
-            elif rate == dec("9"): sales_9 += net
-            else: sales_0 += net
-            vat_out += dec(line.line_vat)
+            # For assignment/quiz, recommend Raw JSON method
+            return redirect(url_for("admin_home", err="Quick create supports Video or Article only. Use Raw JSON for others."))
 
-    vat_in = Decimal("0.00")
-    exps = db.execute(select(Expense).where(Expense.date >= q_start, Expense.date <= q_end)).scalars().all()
-    for e in exps:
-        vat_in += dec(e.vat_amount)
+        structure = {
+            "description_md": description_md,
+            "sections": [
+                {
+                    "title": section_title,
+                    "order": 1,
+                    "lessons": [
+                        {
+                            "lesson_uid": lesson_uid,
+                            "title": lesson_title,
+                            "kind": lesson_kind,
+                            "order": 1,
+                            "content": content
+                        }
+                    ]
+                }
+            ]
+        }
 
-    return {
-        "q_start": q_start, "q_end": q_end,
-        "sales_21": sales_21.quantize(Decimal("0.01")),
-        "sales_9": sales_9.quantize(Decimal("0.01")),
-        "sales_0": sales_0.quantize(Decimal("0.01")),
-        "vat_out": vat_out.quantize(Decimal("0.01")),
-        "vat_in": vat_in.quantize(Decimal("0.01")),
-        "vat_due": (vat_out - vat_in).quantize(Decimal("0.01")),
-    }
+        created_by = get_or_create_admin_user_id()
+        rows = execute_returning("""
+            INSERT INTO courses (title, created_by, is_published, published_at, structure)
+            VALUES (%s, %s, %s, CASE WHEN %s THEN now() ELSE NULL END, %s)
+            RETURNING id;
+        """, (title, created_by, is_published, is_published, json.dumps(structure)))
+        new_id = rows[0]["id"]
+        return redirect(url_for("admin_edit_course", course_id=new_id, msg="Course created"))
+    except Exception as e:
+        return redirect(url_for("admin_home", err=f"Create failed: {e}"))
 
-def compliance_warnings(company: CompanySettings, inv: Invoice) -> list[str]:
-    warns = []
-    if not company.company_name or not company.address or not company.city or not company.postcode:
-        warns.append("Company name/address/postcode/city missing in Company Settings.")
-    if not company.kvk: warns.append("KVK number missing in Company Settings.")
-    if not company.rsin: warns.append("RSIN missing in Company Settings.")
-    if inv.vat_scheme != "EXEMPT":
-        if not company.vat_number:
-            warns.append("Supplier VAT number missing in Company Settings.")
-        elif "[" in (company.vat_number or ""):
-            warns.append("Supplier VAT number looks like a placeholder. Replace it with your real VAT number.")
-    if not company.iban or not company.bic:
-        warns.append("IBAN/BIC missing in Company Settings.")
-    if not inv.client_name or not inv.client_address:
-        warns.append("Customer name and address are required.")
-    if inv.vat_scheme == "REVERSE_CHARGE_EU" and not inv.client_vat_number:
-        warns.append("Customer VAT number required for reverse charge (BTW verlegd).")
-    if inv.supply_date is None:
-        warns.append("Supply/performance date is required.")
-    if not inv.lines:
-        warns.append("Invoice must contain at least one line.")
-    return warns
+@app.post("/admin/course/create-raw")
+def admin_create_course_raw():
+    require_admin()
+    try:
+        title = (request.form.get("title_raw") or "").strip()
+        is_published = bool(request.form.get("is_published_raw"))
+        structure_text = request.form.get("structure_json") or "{}"
+        structure = json.loads(structure_text)  # will raise if invalid
 
-# -------------------------------------------------
-# Page routes
-# -------------------------------------------------
-@app.route("/")
-def dashboard():
-    db = get_db(); company = ensure_company(db)
-    today = date.today()
-    ytd_income = db.execute(
-        select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.date >= date(today.year,1,1))
-    ).scalar_one()
-    ytd_expenses = db.execute(
-        select(func.coalesce(func.sum(Expense.amount_gross), 0)).where(Expense.date >= date(today.year,1,1))
-    ).scalar_one()
+        created_by = get_or_create_admin_user_id()
+        rows = execute_returning("""
+            INSERT INTO courses (title, created_by, is_published, published_at, structure)
+            VALUES (%s, %s, %s, CASE WHEN %s THEN now() ELSE NULL END, %s)
+            RETURNING id;
+        """, (title, created_by, is_published, is_published, json.dumps(structure)))
+        new_id = rows[0]["id"]
+        return redirect(url_for("admin_edit_course", course_id=new_id, msg="Course created"))
+    except Exception as e:
+        return redirect(url_for("admin_home", err=f"Create failed: {e}"))
 
-    vat = vat_summary(db, today.year, ((today.month - 1)//3)+1)
-    recent_invoices = db.execute(select(Invoice).order_by(Invoice.issue_date.desc()).limit(6)).scalars().all()
-    recent_expenses = db.execute(select(Expense).order_by(Expense.date.desc()).limit(6)).scalars().all()
-    recent_payments = db.execute(select(Payment).order_by(Payment.date.desc()).limit(6)).scalars().all()
+@app.get("/admin/course/<int:course_id>/edit")
+def admin_edit_course(course_id: int):
+    require_admin()
+    row = fetch_one("""
+        SELECT id, title, is_published, published_at, created_at, structure
+        FROM courses
+        WHERE id = %s;
+    """, (course_id,))
+    if not row:
+        abort(404)
 
-    return render_template("dashboard.html",
-        csrf_token=csrf_token(), company=company,
-        ytd_income=dec(ytd_income), ytd_expenses=dec(ytd_expenses),
-        **vat, recent_invoices=recent_invoices, recent_expenses=recent_expenses, recent_payments=recent_payments
+    structure = row.get("structure") or {}
+    if isinstance(structure, str):
+        try:
+            structure = json.loads(structure)
+        except Exception:
+            structure = {"sections": []}
+
+    msg = request.args.get("msg")
+    err = request.args.get("err")
+    return render_template(
+        "admin_edit_course.html",
+        course=row,
+        structure_text=pretty_json(structure),
+        msg=msg,
+        err=err
     )
 
-@app.route("/settings")
-def settings_page():
-    db = get_db(); company = ensure_company(db)
-    return render_template("settings.html", csrf_token=csrf_token(), company=company)
-
-@app.route("/invoices")
-def invoices_list():
-    db = get_db(); company = ensure_company(db)
-    status = request.args.get("status")
-    q = select(Invoice).order_by(Invoice.issue_date.desc())
-    if status:
-        q = q.where(Invoice.status == status)
-    invoices = db.execute(q).scalars().all()
-    return render_template("invoices_list.html", csrf_token=csrf_token(), company=company, invoices=invoices, status=status)
-
-@app.route("/invoices/new")
-def invoice_new_page():
-    db = get_db(); company = ensure_company(db)
-    return render_template("invoice_new.html", csrf_token=csrf_token(), company=company)
-
-@app.route("/invoice/<int:invoice_id>")
-def invoice_detail(invoice_id):
-    db = get_db(); company = ensure_company(db)
-    inv = db.get(Invoice, invoice_id)
-    if not inv:
-        flash("Invoice not found.", "warning"); return redirect(url_for("invoices_list"))
-    warns = compliance_warnings(company, inv)
-    return render_template("invoice_detail.html", csrf_token=csrf_token(), company=company, inv=inv, warns=warns)
-
-@app.route("/expenses")
-def expenses_list():
-    db = get_db(); company = ensure_company(db)
-    expenses = db.execute(select(Expense).order_by(Expense.date.desc())).scalars().all()
-    return render_template("expenses_list.html", csrf_token=csrf_token(), company=company, expenses=expenses)
-
-@app.route("/expenses/new")
-def expense_new_page():
-    db = get_db(); company = ensure_company(db)
-    return render_template("expense_new.html", csrf_token=csrf_token(), company=company)
-
-@app.route("/income/new")
-def income_new_page():
-    db = get_db(); company = ensure_company(db)
-    return render_template("income_new.html", csrf_token=csrf_token(), company=company)
-
-# -------------------------------------------------
-# Actions (POST)
-# -------------------------------------------------
-@app.route("/settings/save", methods=["POST"])
-def save_settings():
+@app.post("/admin/course/<int:course_id>/edit")
+def admin_edit_course_post(course_id: int):
+    require_admin()
     try:
-        require_csrf(request.form.get("csrf_token",""))
-        db = get_db(); company = ensure_company(db)
-        company.company_name = request.form.get("company_name","").strip()
-        company.kvk = request.form.get("kvk","").strip()
-        company.rsin = request.form.get("rsin","").strip()
-        company.vat_number = request.form.get("vat_number","").strip()
-        company.invoice_prefix = request.form.get("invoice_prefix","INV").strip() or "INV"
-        company.iban = request.form.get("iban","").strip()
-        company.bic = request.form.get("bic","").strip()
-        company.address = request.form.get("address","").strip()
-        company.postcode = request.form.get("postcode","").strip()
-        company.city = request.form.get("city","").strip()
-        company.country = request.form.get("country","Netherlands").strip()
-        db.commit()
-        flash("Company settings saved.", "success")
-    except Exception as e:
-        get_db().rollback(); flash(f"Settings error: {e}", "danger")
-    return redirect(url_for("settings_page"))
+        title = (request.form.get("title") or "").strip()
+        is_published = bool(request.form.get("is_published"))
+        structure_text = request.form.get("structure_json") or "{}"
+        structure = json.loads(structure_text)  # validate JSON
 
-@app.route("/invoice/create", methods=["POST"])
-def create_invoice():
-    db = get_db()
+        execute("""
+            UPDATE courses
+            SET title = %s,
+                is_published = %s,
+                published_at = CASE WHEN %s THEN COALESCE(published_at, now()) ELSE NULL END,
+                structure = %s
+            WHERE id = %s;
+        """, (title, is_published, is_published, json.dumps(structure), course_id))
+        return redirect(url_for("admin_edit_course", course_id=course_id, msg="Saved"))
+    except Exception as e:
+        return redirect(url_for("admin_edit_course", course_id=course_id, err=f"Save failed: {e}"))
+
+@app.post("/admin/course/<int:course_id>/delete")
+def admin_delete_course(course_id: int):
+    require_admin()
     try:
-        require_csrf(request.form.get("csrf_token",""))
-        company = ensure_company(db)
-        invoice_no = next_invoice_no(db, company.invoice_prefix)
-
-        issue_date = datetime.strptime(request.form["issue_date"], "%Y-%m-%d").date()
-        supply_date = datetime.strptime(request.form["supply_date"], "%Y-%m-%d").date()
-        due_date = datetime.strptime(request.form["due_date"], "%Y-%m-%d").date()
-        currency = request.form.get("currency","EUR").strip().upper()
-        vat_scheme = request.form.get("vat_scheme","STANDARD")
-        client_name = request.form["client_name"].strip()
-        client_address = request.form.get("client_address","").strip()
-        client_vat_number = request.form.get("client_vat_number","").strip()
-        notes = request.form.get("notes","").strip()
-
-        inv = Invoice(
-            invoice_no=invoice_no, issue_date=issue_date, supply_date=supply_date, due_date=due_date,
-            currency=currency, vat_scheme=vat_scheme,
-            client_name=client_name, client_address=client_address, client_vat_number=client_vat_number,
-            notes=notes, status="SENT"
-        )
-        db.add(inv); db.flush()
-
-        # lines
-        descs = request.form.getlist("line_desc")
-        qtys = request.form.getlist("line_qty")
-        prices = request.form.getlist("line_price")
-        vats = request.form.getlist("line_vat")
-        for i in range(len(descs)):
-            d = (descs[i] or "").strip()
-            if not d: continue
-            q = dec(qtys[i] or "0")
-            up = dec(prices[i] or "0")
-            vr = dec(vats[i] or "0")
-            db.add(InvoiceLine(invoice_id=inv.id, description=d, qty=q, unit_price=up, vat_rate=vr))
-        db.flush()
-
-        recalc_invoice(inv); update_status(inv)
-        for w in compliance_warnings(company, inv): flash("Invoice warning: " + w, "warning")
-        db.commit()
-        flash(f"Invoice {inv.invoice_no} created.", "success")
-        return redirect(url_for("invoice_detail", invoice_id=inv.id))
+        execute("DELETE FROM courses WHERE id = %s;", (course_id,))
+        return redirect(url_for("admin_home", msg="Deleted"))
     except Exception as e:
-        db.rollback(); flash(f"Create invoice error: {e}", "danger")
-        return redirect(url_for("invoice_new_page"))
+        return redirect(url_for("admin_home", err=f"Delete failed: {e}"))
 
-@app.route("/invoice/<int:invoice_id>/pay", methods=["POST"])
-def pay_invoice(invoice_id):
-    db = get_db()
-    try:
-        require_csrf(request.form.get("csrf_token",""))
-        inv = db.get(Invoice, invoice_id)
-        if not inv:
-            flash("Invoice not found.", "warning"); return redirect(url_for("invoices_list"))
-        amount = dec(request.form["amount"])
-        pay_date = datetime.strptime(request.form["date"], "%Y-%m-%d").date()
-        method = request.form.get("method","bank")
-        reference = request.form.get("reference","").strip()
-        note = request.form.get("note","").strip()
-        db.add(Payment(invoice_id=invoice_id, date=pay_date, amount=amount, method=method, reference=reference, note=note))
-        db.flush(); update_status(inv); db.commit()
-        flash(f"Payment €{amount} recorded for {inv.invoice_no}.", "success")
-    except Exception as e:
-        db.rollback(); flash(f"Payment error: {e}", "danger")
-    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
-
-@app.route("/income/add", methods=["POST"])
-def add_income():
-    db = get_db()
-    try:
-        require_csrf(request.form.get("csrf_token",""))
-        amount = dec(request.form["amount"])
-        pay_date = datetime.strptime(request.form["date"], "%Y-%m-%d").date()
-        method = request.form.get("method","bank")
-        reference = request.form.get("reference","").strip()
-        note = request.form.get("note","").strip()
-        db.add(Payment(invoice_id=None, date=pay_date, amount=amount, method=method, reference=reference, note=note))
-        db.commit(); flash(f"Income €{amount} saved.", "success")
-    except Exception as e:
-        db.rollback(); flash(f"Income error: {e}", "danger")
-    return redirect(url_for("income_new_page"))
-
-@app.route("/expense/add", methods=["POST"])
-def add_expense():
-    db = get_db()
-    try:
-        require_csrf(request.form.get("csrf_token",""))
-        exp_date = datetime.strptime(request.form["date"], "%Y-%m-%d").date()
-        vendor = request.form["vendor"].strip()
-        category = request.form.get("category","General").strip()
-        description = request.form.get("description","").strip()
-        currency = request.form.get("currency","EUR").strip().upper()
-        amount_gross = dec(request.form["amount_gross"])
-        vat_rate = dec(request.form.get("vat_rate","21"))
-
-        if vat_rate <= Decimal("0"):
-            amount_net = amount_gross; vat_amount = Decimal("0.00")
-        else:
-            amount_net = (amount_gross / (Decimal("1.00") + vat_rate/Decimal("100"))).quantize(Decimal("0.01"))
-            vat_amount = (amount_gross - amount_net).quantize(Decimal("0.01"))
-
-        receipt_path = None
-        file = request.files.get("receipt")
-        if file and file.filename:
-            fname = secure_filename(file.filename)
-            ts = datetime.now().strftime("%Y%m%d%H%M%S")
-            base, ext = os.path.splitext(fname)
-            fname = f"{base}_{ts}{ext}".replace(" ", "_")
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], fname))
-            receipt_path = fname
-
-        db.add(Expense(
-            date=exp_date, vendor=vendor, category=category, description=description, currency=currency,
-            vat_rate=vat_rate, amount_net=amount_net, vat_amount=vat_amount, amount_gross=amount_gross,
-            receipt_path=receipt_path
-        ))
-        db.commit(); flash("Expense saved.", "success")
-    except Exception as e:
-        db.rollback(); flash(f"Expense error: {e}", "danger")
-    return redirect(url_for("expense_new_page"))
-
-@app.route("/uploads/<path:filename>")
-def uploaded_file(filename):
-    return send_from_directory(app.config["UPLOAD_FOLDER"], filename, as_attachment=False)
-
+# Local dev
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)), debug=True)
