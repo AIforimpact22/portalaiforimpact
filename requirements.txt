@@ -1,3 +1,9 @@
-Flask==3.0.3
-gunicorn==22.0.0
-psycopg2-binary==2.9.9
+diff --git a/requirements.txt b/requirements.txt
+index 1536589cdc1009aba96f10fbc55c662b7322b28e..d978dc6fb404963f0bb09610711281ddcdb147f2 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,4 @@
+ Flask==3.0.3
+ gunicorn==22.0.0
+ psycopg2-binary==2.9.9
++PyYAML==6.0.1
