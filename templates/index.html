@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Learning Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#f7f7fb; --card:#fff; --text:#1b1f24; --muted:#586174; --accent:#2f6feb; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:24px; background:linear-gradient(120deg, #e9f0ff, #f7f7fb); border-bottom:1px solid #e8e8ef; display:flex; align-items:center; justify-content:space-between; }
+    header h1 { margin:0 0 6px; font-size: 1.6rem; }
+    header p { margin:0; color:var(--muted); }
+    main { padding: 24px; max-width: 1000px; margin: 0 auto; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:16px; }
+    .card { background:var(--card); border:1px solid #ececf3; border-radius:12px; padding:16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+    .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef3ff; color:var(--accent); border:1px solid #dfe6ff; }
+    .muted { color:var(--muted); font-size: 12px; }
+    a.more { text-decoration:none; color:var(--accent); font-weight:600; }
+    .nav a { text-decoration:none; color:var(--accent); font-weight:600; }
+    footer { text-align:center; padding:24px; color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Learning Portal</h1>
+      <p>Browse courses and continue your learning.</p>
+    </div>
+    <nav class="nav">
+      <a href="/admin">Admin</a>
+    </nav>
+  </header>
+
+  <main>
+    {% if courses|length == 0 %}
+      <p class="muted">No courses yet. Add one to your <code>courses</code> table (try the <a href="/admin">Admin</a> page).</p>
+    {% else %}
+      <div class="grid">
+        {% for c in courses %}
+          <article class="card">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <h3 style="margin:0 8px 0 0; font-size:1.05rem;">{{ c.title }}</h3>
+              {% if c.is_published %}
+                <span class="badge">Published</span>
+              {% else %}
+                <span class="badge" style="background:#fff5e6;border-color:#ffd9a8;color:#a66300;">Draft</span>
+              {% endif %}
+            </div>
+            <p class="muted" style="margin:8px 0 16px;">
+              Created: {{ c.created_at or '—' }}
+              {% if c.published_at %} &middot; Published: {{ c.published_at }}{% endif %}
+            </p>
+            <a class="more" href="/course/{{ c.id }}">Open course →</a>
+          </article>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </main>
+
+  <footer>
+    Powered by Flask · Cloud SQL Postgres
+  </footer>
+</body>
+</html>
