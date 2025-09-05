@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Admin · Learning Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --bg:#f7f7fb; --card:#fff; --text:#1b1f24; --muted:#586174; --accent:#2f6feb; --warn:#a66300; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:24px; background:linear-gradient(120deg, #e9f0ff, #f7f7fb); border-bottom:1px solid #e8e8ef; display:flex; justify-content:space-between; align-items:center; }
+    header a { color:var(--accent); text-decoration:none; font-weight:600; }
+    main { padding:24px; max-width:1000px; margin:0 auto; }
+    .card { background:var(--card); border:1px solid #ececf3; border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
+    h2 { margin:0 0 12px; font-size:1.2rem; }
+    label { display:block; font-size:12px; color:var(--muted); margin:10px 0 6px; }
+    input[type="text"], textarea, select { width:100%; padding:10px; border-radius:8px; border:1px solid #e0e0ea; font:inherit; }
+    textarea { min-height: 140px; }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .actions { margin-top:12px; display:flex; gap:10px; }
+    .btn { padding:10px 14px; border-radius:8px; border:1px solid #dfe3f0; background:#eef3ff; color:var(--accent); cursor:pointer; font-weight:600; }
+    .btn.warn { background:#fff5e6; color:var(--warn); border-color:#ffd9a8; }
+    .muted { color:var(--muted); font-size:12px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:10px; border-bottom:1px solid #eee; text-align:left; font-size:14px; }
+    .msg { padding:10px 12px; border-radius:8px; margin-bottom:16px; }
+    .ok { background:#eef9f0; border:1px solid #cfead7; color:#1d7f3a; }
+    .err { background:#fff1f1; border:1px solid #ffd1d1; color:#b20000; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← Back</a>
+    <strong>Admin</strong>
+    <span></span>
+  </header>
+
+  <main>
+    {% if msg %}<div class="msg ok">{{ msg }}</div>{% endif %}
+    {% if err %}<div class="msg err">{{ err }}</div>{% endif %}
+
+    <section class="card">
+      <h2>Quick Create — Video or Article</h2>
+      <form method="post" action="/admin/course/create">
+        <label>Title</label>
+        <input type="text" name="title" required />
+
+        <div class="row">
+          <div>
+            <label><input type="checkbox" name="is_published" /> Published</label>
+          </div>
+          <div></div>
+        </div>
+
+        <label>Course Description (Markdown)</label>
+        <textarea name="description_md" placeholder="## About this course"></textarea>
+
+        <div class="row">
+          <div>
+            <label>Section Title</label>
+            <input type="text" name="section_title" value="Introduction" />
+          </div>
+          <div>
+            <label>Lesson Kind</label>
+            <select name="lesson_kind" id="lesson_kind">
+              <option value="video">video</option>
+              <option value="article">article</option>
+            </select>
+          </div>
+        </div>
+
+        <label>Lesson Title</label>
+        <input type="text" name="lesson_title" value="Welcome" />
+
+        <div id="video_fields">
+          <div class="row">
+            <div>
+              <label>Video URL</label>
+              <input type="text" name="video_url" placeholder="https://... (optional)" />
+            </div>
+            <div>
+              <label>Duration (sec)</label>
+              <input type="text" name="duration_sec" placeholder="e.g. 210" />
+            </div>
+          </div>
+          <label>Notes (Markdown)</label>
+          <textarea name="notes_md" placeholder="### Watch carefully..."></textarea>
+        </div>
+
+        <div id="article_fields" style="display:none;">
+          <label>Article Body (Markdown)</label>
+          <textarea name="article_body_md" placeholder="## Article content"></textarea>
+        </div>
+
+        <div class="actions">
+          <button class="btn" type="submit">Create Course</button>
+          <span class="muted">For quizzes/assignments, use Raw JSON below.</span>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Create with Raw JSON</h2>
+      <form method="post" action="/admin/course/create-raw">
+        <label>Title</label>
+        <input type="text" name="title_raw" required />
+
+        <label><input type="checkbox" name="is_published_raw" /> Published</label>
+
+        <div class="actions">
+          <button class="btn" type="button" onclick="fillSample()">Insert Sample JSON</button>
+        </div>
+
+        <label>Structure JSON</label>
+        <textarea name="structure_json" id="structure_json" placeholder='{"description_md": "...", "sections": [...]}'></textarea>
+
+        <div class="actions">
+          <button class="btn" type="submit">Create Course (Raw)</button>
+        </div>
+      </form>
+      <p class="muted">Tip: structure supports Markdown in fields like <code>description_md</code>, <code>body_md</code>, <code>notes_md</code>, etc.</p>
+    </section>
+
+    <section class="card">
+      <h2>Courses</h2>
+      {% if courses|length == 0 %}
+        <p class="muted">No courses yet.</p>
+      {% else %}
+        <table>
+          <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for c in courses %}
+            <tr>
+              <td>{{ c.id }}</td>
+              <td>{{ c.title }}</td>
+              <td>{% if c.is_published %}Published{% else %}Draft{% endif %}</td>
+              <td>
+                <a href="/admin/course/{{ c.id }}/edit">Edit</a> ·
+                <form method="post" action="/admin/course/{{ c.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this course?');">
+                  <button class="btn warn" type="submit">Delete</button>
+                </form> ·
+                <a href="/course/{{ c.id }}">View</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </section>
+  </main>
+
+  <script>
+    const kindSel = document.getElementById('lesson_kind');
+    const videoFields = document.getElementById('video_fields');
+    const articleFields = document.getElementById('article_fields');
+    function toggleKind() {
+      const k = kindSel.value;
+      videoFields.style.display = (k === 'video') ? '' : 'none';
+      articleFields.style.display = (k === 'article') ? '' : 'none';
+    }
+    kindSel.addEventListener('change', toggleKind);
+    toggleKind();
+
+    function fillSample() {
+      const uid1 = crypto.randomUUID ? crypto.randomUUID() : 'uuid-1';
+      const uid2 = crypto.randomUUID ? crypto.randomUUID() : 'uuid-2';
+      const sample = {
+        "description_md": "## Sample Course\\nThis is a demo.",
+        "sections": [
+          {
+            "title": "Intro",
+            "order": 1,
+            "lessons": [
+              {
+                "lesson_uid": uid1,
+                "title": "Welcome Video",
+                "kind": "video",
+                "order": 1,
+                "content": {
+                  "provider": "url",
+                  "url": "https://example.com/video.mp4",
+                  "duration_sec": 180,
+                  "notes_md": "### Watch carefully"
+                }
+              },
+              {
+                "lesson_uid": uid2,
+                "title": "Quiz 1",
+                "kind": "quiz",
+                "order": 2,
+                "content": {
+                  "time_limit_sec": 300,
+                  "questions": [
+                    {
+                      "qtype": "single_choice",
+                      "prompt_md": "What is **2+2**?",
+                      "options": [
+                        {"text_md": "3", "correct": false},
+                        {"text_md": "4", "correct": true}
+                      ],
+                      "points": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      };
+      document.getElementById('structure_json').value = JSON.stringify(sample, null, 2);
+    }
+  </script>
+</body>
+</html>
