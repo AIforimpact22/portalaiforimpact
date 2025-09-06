@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>{% block title %}Learning Portal{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="{{ url_for('static', filename='styles.css') }}" rel="stylesheet" />
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a href="/" class="brand">
+        <img class="brand-logo" src="https://aiforimpact.net/wp-content/uploads/2025/05/justcercile.png" alt="Ai For Impact logo" />
+        <span class="brand-name">Ai For Impact</span>
+      </a>
+      <nav class="nav">
+        <a href="/">Course</a>
+        <a href="/admin">Admin</a>
+      </nav>
+    </div>
+  </header>
+
+  {% block hero %}{% endblock %}
+
+  <main class="container page">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-inner only-link">
+      <a href="https://www.aiforimpact.net" target="_blank" rel="noopener">www.aiforimpact.net</a>
+    </div>
+  </footer>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

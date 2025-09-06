@@ -1,54 +1,21 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Edit Course · {{ course.title }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { --bg:#f7f7fb; --card:#fff; --text:#1b1f24; --muted:#586174; --accent:#2f6feb; --warn:#a66300; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
-    header { padding:24px; background:linear-gradient(120deg, #e9f0ff, #f7f7fb); border-bottom:1px solid #e8e8ef; display:flex; justify-content:space-between; align-items:center; }
-    header a { color:var(--accent); text-decoration:none; font-weight:600; }
-    main { padding:24px; max-width:900px; margin:0 auto; }
-    .card { background:var(--card); border:1px solid #ececf3; border-radius:12px; padding:16px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.04); }
-    h2 { margin:0 0 12px; font-size:1.2rem; }
-    label { display:block; font-size:12px; color:var(--muted); margin:10px 0 6px; }
-    input[type="text"], textarea { width:100%; padding:10px; border-radius:8px; border:1px solid #e0e0ea; font:inherit; }
-    textarea { min-height: 320px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-    .actions { margin-top:12px; display:flex; gap:10px; }
-    .btn { padding:10px 14px; border-radius:8px; border:1px solid #dfe3f0; background:#eef3ff; color:var(--accent); cursor:pointer; font-weight:600; }
-    .msg { padding:10px 12px; border-radius:8px; margin-bottom:16px; }
-    .ok { background:#eef9f0; border:1px solid #cfead7; color:#1d7f3a; }
-    .err { background:#fff1f1; border:1px solid #ffd1d1; color:#b20000; }
-  </style>
-</head>
-<body>
-  <header>
-    <a href="/admin">← Admin</a>
-    <strong>Edit Course</strong>
-    <a href="/course/{{ course.id }}">View</a>
-  </header>
+{% extends "base.html" %}
+{% block title %}Raw JSON · {{ course.title }}{% endblock %}
 
-  <main>
-    {% if msg %}<div class="msg ok">{{ msg }}</div>{% endif %}
-    {% if err %}<div class="msg err">{{ err }}</div>{% endif %}
+{% block content %}
+  {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="alert error">{{ err }}</div>{% endif %}
 
-    <section class="card">
-      <h2>{{ course.title }}</h2>
-      <form method="post" action="/admin/course/{{ course.id }}/edit">
-        <label>Title</label>
-        <input type="text" name="title" value="{{ course.title }}" required />
-
-        <label><input type="checkbox" name="is_published" {% if course.is_published %}checked{% endif %}/> Published</label>
-
-        <label>Structure JSON</label>
-        <textarea name="structure_json">{{ structure_text }}</textarea>
-
-        <div class="actions">
-          <button class="btn" type="submit">Save</button>
-        </div>
-      </form>
-    </section>
-  </main>
-</body>
-</html>
+  <section class="card">
+    <h2>Edit Course — Raw JSON</h2>
+    <form method="post" action="/admin/course/{{ course.id }}/edit">
+      <label>Title</label>
+      <input type="text" name="title" value="{{ course.title }}" required />
+      <label><input type="checkbox" name="is_published" {% if course.is_published %}checked{% endif %}/> Published</label>
+      <label>Structure JSON</label>
+      <textarea name="structure_json" style="min-height:380px">{{ structure_text }}</textarea>
+      <div class="actions">
+        <button class="btn" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+{% endblock %}

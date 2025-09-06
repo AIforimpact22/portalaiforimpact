@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Learn · {{ course.title }}{% endblock %}
+
+{% block content %}
+<div class="learn-layout">
+  <aside class="learn-sidebar">
+    <div class="sidebar-inner">
+      <a class="back" href="/course/{{ course.id }}-{{ course.slug }}">← Back to course</a>
+      <h2 class="sidebar-title">{{ course.title }}</h2>
+      <ol class="sidebar-sections">
+        {% for s in sections %}
+          <li>
+            <div class="section-title">{{ s.title or ('Section ' ~ loop.index) }}</div>
+            <ul class="sidebar-lessons">
+              {% for l in s.lessons or [] %}
+                {% set is_current = (l.lesson_uid|string == current_lesson_uid|string) %}
+                <li>
+                  <a class="lesson-link {% if is_current %}current{% endif %}"
+                     href="/learn/{{ course.id }}/{{ l.lesson_uid }}">{{ l.title or 'Lesson' }}</a>
+                </li>
+              {% endfor %}
+            </ul>
+          </li>
+        {% endfor %}
+      </ol>
+    </div>
+  </aside>
+
+  <section class="learn-content">
+    <div class="learn-header">
+      <h1>{{ lesson.title or 'Lesson' }}</h1>
+      <div class="muted">{{ (lesson.kind or 'lesson')|capitalize }}</div>
+    </div>
+
+    <div class="learn-body">
+      {% set c = lesson.content or {} %}
+      {% if (lesson.kind or '') == 'video' %}
+        {% if c.url %}
+          <div class="video-frame">
+            <video controls preload="metadata" src="{{ c.url }}"></video>
+          </div>
+        {% else %}
+          <div class="alert">No video URL provided.</div>
+        {% endif %}
+        {% if c.notes_md %}<div class="prose">{{ c.notes_md | rich }}</div>{% endif %}
+
+      {% elif (lesson.kind or '') == 'article' %}
+        {% if c.body_md %}
+          <div class="prose">{{ c.body_md | rich }}</div>
+        {% else %}
+          <p class="muted">No article content.</p>
+        {% endif %}
+
+      {% elif (lesson.kind or '') == 'quiz' %}
+        {% set qs = c.questions or [] %}
+        {% if qs|length == 0 %}
+          <p class="muted">No quiz questions yet.</p>
+        {% else %}
+          <div class="card">
+            <h3>Quiz</h3>
+            <ol>
+              {% for q in qs %}
+                <li style="margin:10px 0">
+                  <div class="prose">{{ q.prompt_md | rich }}</div>
+                  <ul style="list-style:none; padding:0">
+                    {% for opt in q.options or [] %}
+                      <li>
+                        <label>
+                          <input type="{{ 'radio' if (q.qtype or 'single_choice') == 'single_choice' else 'checkbox' }}"
+                                 name="q{{ loop.index0 }}{% if (q.qtype or 'single_choice') != 'single_choice' %}[] {% endif %}">
+                          {{ opt.text_md | rich }}
+                        </label>
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </li>
+              {% endfor %}
+            </ol>
+            <div class="muted small">* Client-side scoring can be added later.</div>
+          </div>
+        {% endif %}
+
+      {% elif (lesson.kind or '') == 'assignment' %}
+        <div class="prose">{{ (c.instructions_md or '<p>Assignment details TBA</p>') | rich }}</div>
+        {% if c.resource_url %}
+          <p><a class="btn ghost" href="{{ c.resource_url }}" target="_blank" rel="noopener">Open Resource</a></p>
+        {% endif %}
+
+      {% else %}
+        <pre><code>{{ (lesson.content or {}) | tojson(indent=2) }}</code></pre>
+      {% endif %}
+    </div>
+
+    <div class="learn-nav">
+      {% if prev_uid %}
+        <a class="btn ghost" href="/learn/{{ course.id }}/{{ prev_uid }}">← Previous</a>
+      {% else %}
+        <span></span>
+      {% endif %}
+      {% if next_uid %}
+        <a class="btn" href="/learn/{{ course.id }}/{{ next_uid }}">Next →</a>
+      {% else %}
+        <a class="btn ghost" href="/course/{{ course.id }}-{{ course.slug }}">Back to course</a>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

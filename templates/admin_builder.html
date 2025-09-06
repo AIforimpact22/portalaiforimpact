@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Builder · {{ course.title }}{% endblock %}
+
+{% block content %}
+  {% if msg %}<div class="alert ok">{{ msg }}</div>{% endif %}
+  {% if err %}<div class="alert error">{{ err }}</div>{% endif %}
+
+  <section class="card">
+    <h2>{{ course.title }}</h2>
+    <div class="actions">
+      <a class="btn ghost" href="/course/{{ course.id }}">View</a>
+      <a class="btn ghost" href="/learn/{{ course.id }}">Open Player</a>
+      <a class="btn" href="/admin/course/{{ course.id }}/edit">Raw JSON</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Add a new Week/Module</h3>
+    <form method="post" action="/admin/course/{{ course.id }}/add-week">
+      <label>Week Title</label>
+      <input type="text" name="title" placeholder="Week N: Title" />
+      <div class="actions">
+        <button class="btn" type="submit">Add Week</button>
+      </div>
+    </form>
+  </section>
+
+  {% for s in sections %}
+    {% set week_index = loop.index0 %}
+    <section class="card">
+      <h3>{{ s.title or ('Week ' ~ loop.index) }}</h3>
+
+      {% if s.lessons and (s.lessons|length) %}
+      <table class="table">
+        <thead><tr><th>#</th><th>Title</th><th>Kind</th><th>Duration</th><th>Actions</th></tr></thead>
+        <tbody>
+          {% for l in s.lessons or [] %}
+          <tr>
+            <td>{{ l.order or loop.index }}</td>
+            <td>{{ l.title }}</td>
+            <td>{{ l.kind }}</td>
+            <td>
+              {% if l.content and l.content.duration_sec %}
+                {{ l.content.duration_sec | duration }}
+              {% else %}—{% endif %}
+            </td>
+            <td>
+              <form method="post" action="/admin/course/{{ course.id }}/remove-lesson"
+                    style="display:inline" onsubmit="return confirm('Remove this lesson?');">
+                <input type="hidden" name="week_index" value="{{ week_index }}">
+                <input type="hidden" name="lesson_uid" value="{{ l.lesson_uid }}">
+                <button class="btn ghost" type="submit">Remove</button>
+              </form>
+              <a class="btn" href="/learn/{{ course.id }}/{{ l.lesson_uid }}">Open</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p class="muted">No sections yet.</p>
+      {% endif %}
+
+      <details>
+        <summary><strong>Add Section</strong></summary>
+        <form method="post" action="/admin/course/{{ course.id }}/add-lesson">
+          <input type="hidden" name="week_index" value="{{ week_index }}">
+
+          <label>Kind</label>
+          <select name="kind" id="kind-{{ week_index }}" onchange="toggleKind('{{ week_index }}')">
+            <option value="article">article</option>
+            <option value="video">video</option>
+            <option value="quiz">quiz</option>
+            <option value="assignment">assignment</option>
+          </select>
+
+          <label>Title</label>
+          <input type="text" name="title" placeholder="Section title" />
+
+          <div id="article-{{ week_index }}" class="kind-fields">
+            <label>Article Body (HTML or Markdown)</label>
+            <textarea name="body_md" placeholder="<h2>Custom HTML allowed</h2> or **Markdown**"></textarea>
+          </div>
+
+          <div id="video-{{ week_index }}" class="kind-fields" style="display:none">
+            <label>Video URL</label>
+            <input type="text" name="video_url" placeholder="https://... (HLS/MP4/YouTube embed link)" />
+            <label>Duration (seconds)</label>
+            <input type="text" name="duration_sec" placeholder="e.g., 600" />
+            <label>Notes (HTML or Markdown)</label>
+            <textarea name="notes_md" placeholder="<p>Key takeaways</p>"></textarea>
+          </div>
+
+          <div id="quiz-{{ week_index }}" class="kind-fields" style="display:none">
+            <label>Quiz JSON</label>
+            <textarea name="quiz_json" placeholder='{"questions":[{"qtype":"single_choice","prompt_md":"2+2?","options":[{"text_md":"3","correct":false},{"text_md":"4","correct":true}],"points":1}]}'></textarea>
+          </div>
+
+          <div id="assignment-{{ week_index }}" class="kind-fields" style="display:none">
+            <label>Instructions (HTML or Markdown)</label>
+            <textarea name="instructions_md" placeholder="<h3>Assignment brief</h3>"></textarea>
+            <label>Resource URL (optional)</label>
+            <input type="text" name="resource_url" placeholder="https://link-to-resource" />
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="submit">Add Section</button>
+          </div>
+        </form>
+      </details>
+    </section>
+  {% endfor %}
+
+  <script>
+    function toggleKind(idx){
+      const kinds = ["article","video","quiz","assignment"];
+      kinds.forEach(k => {
+        const el = document.getElementById(k + "-" + idx);
+        if(!el) return;
+        el.style.display = "none";
+      });
+      const select = document.getElementById("kind-" + idx);
+      const chosen = select.value;
+      const shown = document.getElementById(chosen + "-" + idx);
+      if (shown) shown.style.display = "";
+    }
+  </script>
+{% endblock %}

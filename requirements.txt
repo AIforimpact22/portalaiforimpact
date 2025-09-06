@@ -1,5 +1,5 @@
-
 Flask==3.0.3
-gunicorn==22.0.0
 psycopg2-binary==2.9.9
-PyYAML==6.0.1
+markdown==3.6
+# Optional; only used if you set SANITIZE_HTML=1 later.
+bleach==6.1.0

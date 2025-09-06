@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}{{ course.title }} · Learning{% endblock %}
+
+{% block hero %}
+<section class="course-hero">
+  <div class="container course-hero-inner">
+    <div class="course-hero-text">
+      <div class="crumbs"><a href="/">Home</a> › <span>{{ course.category }}</span></div>
+      <h1 class="course-title">{{ course.title }}</h1>
+      <div class="course-meta">
+        <span>{{ course.level }}</span>
+        <span class="sep">·</span>
+        <span>{{ course.lessons_count }} lessons</span>
+        <span class="sep">·</span>
+        <span>{{ course.duration_total }}</span>
+      </div>
+      <div class="hero-actions">
+        <a class="btn" href="/learn/{{ course.id }}">Start learning</a>
+        <a class="btn ghost" href="#syllabus">View syllabus</a>
+      </div>
+    </div>
+    <div class="course-hero-media">
+      <img src="{{ course.thumbnail_url }}" alt="Course cover" />
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block content %}
+  {% if description_md %}
+  <section class="section card rich">
+    <h2>About this course</h2>
+    <div class="prose">{{ description_md | rich }}</div>
+  </section>
+  {% endif %}
+
+  <section id="syllabus" class="section card">
+    <h2>Syllabus (Weeks & Sections)</h2>
+    {% if sections and sections|length %}
+      <ol class="syllabus">
+        {% for s in sections %}
+          <li class="syllabus-section">
+            <h3>{{ s.title or ('Section ' ~ loop.index) }}</h3>
+            {% if s.lessons and s.lessons|length %}
+              <ul class="lesson-list">
+                {% for l in s.lessons %}
+                  <li class="lesson-item">
+                    <div>
+                      <strong>{{ l.title or ('Lesson ' ~ loop.index) }}</strong>
+                      <span class="muted">· {{ (l.kind or 'lesson')|capitalize }}</span>
+                    </div>
+                    {% set dur = (l.content.duration_sec if l.content else None) %}
+                    <div class="muted">{{ dur | duration }}</div>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <p class="muted">No sections added yet.</p>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="muted">The course has no weeks yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

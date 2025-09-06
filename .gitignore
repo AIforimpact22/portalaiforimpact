@@ -1,2 +1,15 @@
-# secrets
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
 .env
+.python-version
+ds-key.json
+app.yaml
+.DS_Store
+.idea/
+.vscode/
+*.log
+dist/
+build/

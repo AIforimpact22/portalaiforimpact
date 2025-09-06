@@ -1,15 +1,6 @@
 service: teaching
-
 runtime: python311
-
 entrypoint: gunicorn -b :$PORT main:app
 
 env_variables:
-  # Cloud SQL (PostgreSQL)
-  INSTANCE_CONNECTION_NAME: "aiforimpact:me-central1:aiforimpact"
-  DB_USER: "aiforimpact"
-  DB_NAME: "aiforimpact"
-  DB_PASS: 'Meer2025"%'
-
-beta_settings:
-  cloud_sql_instances: "aiforimpact:me-central1:aiforimpact"
+  DATABASE_URL: 'postgresql+psycopg2://aiforimpact:Meer2025%22%25@/aiforimpact?host=/cloudsql/aiforimpact:me-central1:aiforimpact'

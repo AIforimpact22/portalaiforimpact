@@ -1,64 +1,84 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Learning Portal</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    :root { --bg:#f7f7fb; --card:#fff; --text:#1b1f24; --muted:#586174; --accent:#2f6feb; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--text); }
-    header { padding:24px; background:linear-gradient(120deg, #e9f0ff, #f7f7fb); border-bottom:1px solid #e8e8ef; display:flex; align-items:center; justify-content:space-between; }
-    header h1 { margin:0 0 6px; font-size: 1.6rem; }
-    header p { margin:0; color:var(--muted); }
-    main { padding: 24px; max-width: 1000px; margin: 0 auto; }
-    .grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap:16px; }
-    .card { background:var(--card); border:1px solid #ececf3; border-radius:12px; padding:16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
-    .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef3ff; color:var(--accent); border:1px solid #dfe6ff; }
-    .muted { color:var(--muted); font-size: 12px; }
-    a.more { text-decoration:none; color:var(--accent); font-weight:600; }
-    .nav a { text-decoration:none; color:var(--accent); font-weight:600; }
-    footer { text-align:center; padding:24px; color:var(--muted); font-size:12px; }
-  </style>
-</head>
-<body>
-  <header>
-    <div>
-      <h1>Learning Portal</h1>
-      <p>Browse courses and continue your learning.</p>
-    </div>
-    <nav class="nav">
-      <a href="/admin">Admin</a>
-    </nav>
-  </header>
+{% extends "base.html" %}
+{% block title %}{{ course.title if course else 'Learning Portal' }}{% endblock %}
 
-  <main>
-    {% if courses|length == 0 %}
-      <p class="muted">No courses yet. Add one to your <code>courses</code> table (try the <a href="/admin">Admin</a> page).</p>
-    {% else %}
-      <div class="grid">
-        {% for c in courses %}
-          <article class="card">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <h3 style="margin:0 8px 0 0; font-size:1.05rem;">{{ c.title }}</h3>
-              {% if c.is_published %}
-                <span class="badge">Published</span>
-              {% else %}
-                <span class="badge" style="background:#fff5e6;border-color:#ffd9a8;color:#a66300;">Draft</span>
-              {% endif %}
-            </div>
-            <p class="muted" style="margin:8px 0 16px;">
-              Created: {{ c.created_at or '—' }}
-              {% if c.published_at %} &middot; Published: {{ c.published_at }}{% endif %}
-            </p>
-            <a class="more" href="/course/{{ c.id }}">Open course →</a>
-          </article>
-        {% endfor %}
+{% block hero %}
+{% if course %}
+<section class="spotlight-hero">
+  <div class="container">
+    <div class="spotlight-grid">
+      <div class="spotlight-text">
+        <div class="eyebrow">Master Course</div>
+        <h1 class="spotlight-title">{{ course.title }}</h1>
+        <p class="lead">{{ course.level }} · {{ course.category }}</p>
+
+        <div class="hero-cta">
+          <a class="btn" href="/learn/{{ course.id }}">Start learning</a>
+          {% if first_uid %}
+            <a class="btn ghost" id="continue-btn" href="/learn/{{ course.id }}/{{ first_uid }}">Continue</a>
+          {% endif %}
+        </div>
+
+        <div class="stat-row">
+          <div class="stat">
+            <div class="num">{{ modules_count }}</div>
+            <div class="label">Modules</div>
+          </div>
+          <div class="stat">
+            <div class="num">{{ lessons_count }}</div>
+            <div class="label">Sections</div>
+          </div>
+          <div class="stat">
+            <div class="num">{{ duration_total }}</div>
+            <div class="label">Total time</div>
+          </div>
+        </div>
       </div>
-    {% endif %}
-  </main>
 
-  <footer>
-    Powered by Flask · Cloud SQL Postgres
-  </footer>
-</body>
-</html>
+      <div class="spotlight-media">
+        <img src="{{ course.thumbnail_url }}" alt="Course cover" />
+      </div>
+    </div>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+  {% if err %}<div class="alert error">Error: {{ err }}</div>{% endif %}
+
+  <section id="curriculum" class="section card">
+    <h2>Curriculum overview</h2>
+    {% if weeks and weeks|length %}
+      <ol class="timeline">
+        {% for w in weeks %}
+          <li class="timeline-item">
+            <div class="dot"></div>
+            <div class="content">
+              <div class="week-title">{{ w.title }}</div>
+              <div class="muted small">{{ w.lessons_count }} sections</div>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+      <div class="actions">
+        <a class="btn" href="/learn/{{ course.id }}">Begin course</a>
+      </div>
+    {% else %}
+      <p class="muted">The curriculum will appear here.</p>
+    {% endif %}
+  </section>
+
+  <script>
+    // Continue button -> last visited lesson (if available)
+    (function(){
+      try {
+        var key = "progress_course_" + {{ course.id }};
+        var uid = localStorage.getItem(key);
+        if (uid) {
+          var btn = document.getElementById('continue-btn');
+          if (btn) btn.href = "/learn/{{ course.id }}/" + uid;
+        }
+      } catch(e){}
+    })();
+  </script>
+{% endblock %}
